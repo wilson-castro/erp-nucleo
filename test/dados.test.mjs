@@ -52,8 +52,60 @@ test('o adaptador HTTP envia Bearer e nunca expoe o token no retorno', async () 
   servidor.close()
 })
 
-test('o adaptador HTTP recusa id que tenta escapar do caminho', async () => {
-  const dados = dadosHttp({ baseUrl: 'http://127.0.0.1:4000' })({ obterToken: async () => 'x' })
-  // o id vem da URL, portanto do cliente: precisa ser codificado, nunca concatenado cru
-  await assert.rejects(() => dados.lerPedido('../../admin'))
+test('o id do cliente nunca escapa de /pedidos/', async () => {
+  // Um servidor REAL, que registra o caminho recebido. Sem ele o teste passaria por
+  // ECONNREFUSED — inclusive contra uma implementacao deliberadamente vulneravel, que
+  // e como a versao anterior deste teste nao provava nada.
+  const caminhos = []
+  const servidor = (await import('node:http')).createServer((req, res) => {
+    caminhos.push(req.url)
+    res.writeHead(404, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ codigo: 'ERRO_INTERNO' }))
+  })
+  await new Promise((r) => servidor.listen(0, '127.0.0.1', r))
+  const porta = servidor.address().port
+  const dados = dadosHttp({ baseUrl: `http://127.0.0.1:${porta}` })({
+    obterToken: async () => 'x',
+  })
+
+  for (const hostil of ['../../admin', '..%2f..%2fadmin', 'a/../../b', '\\..\\admin']) {
+    await assert.rejects(() => dados.lerPedido(hostil))
+  }
+  for (const visto of caminhos) {
+    assert.ok(visto.startsWith('/pedidos/'), `saiu do namespace: ${visto}`)
+  }
+  servidor.close()
+})
+
+test('id . e .. nao alcancam a rede — a normalizacao de URL os colapsaria', async () => {
+  // encodeURIComponent NAO escapa ponto: '/pedidos/..' normaliza para '/', mesma origem
+  // e fora do namespace. O check de origem nao pega isto, porque a origem nao muda.
+  let alcancou = false
+  const servidor = (await import('node:http')).createServer((req, res) => {
+    alcancou = true
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{}')
+  })
+  await new Promise((r) => servidor.listen(0, '127.0.0.1', r))
+  const porta = servidor.address().port
+  const dados = dadosHttp({ baseUrl: `http://127.0.0.1:${porta}` })({
+    obterToken: async () => 'x',
+  })
+
+  for (const id of ['.', '..']) {
+    await assert.rejects(() => dados.lerPedido(id), NaoEncontrado, `id ${id} passou`)
+  }
+  assert.equal(alcancou, false, 'a requisicao nao deveria ter saido')
+  servidor.close()
+})
+
+test('o fake alcanca a forma SEM versao, que o adaptador HTTP produz sem ETag', async () => {
+  const semVersao = dadosFake({ '8821': PEDIDO }, { omitirVersao: true })({
+    obterToken: async () => 'x',
+  })
+  const r = await semVersao.lerPedido('8821')
+  assert.ok(!('versao' in r), 'o fake precisa poder omitir a chave, como o adaptador HTTP')
+
+  const comVersao = dadosFake({ '8821': PEDIDO })({ obterToken: async () => 'x' })
+  assert.equal((await comVersao.lerPedido('8821')).versao, '"42"')
 })

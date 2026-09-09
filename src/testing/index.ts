@@ -12,13 +12,21 @@ import { NaoEncontrado } from '../interno/erros.js'
  * adaptador real destrói o propósito da porta: o teste passa e não prova nada sobre
  * produção.
  */
-export function dadosFake(pedidos: Record<string, PedidoDTO>): FabricaDeDados {
+export function dadosFake(
+  pedidos: Record<string, PedidoDTO>,
+  opcoes: { omitirVersao?: boolean } = {},
+): FabricaDeDados {
   const porId = new Map(Object.entries(pedidos))
   return () => ({
     async lerPedido(id) {
       const pedido = porId.get(id)
       if (!pedido) throw new NaoEncontrado()
-      return { pedido, versao: `"${pedido.versao}"` }
+      // `omitirVersao` existe porque o adaptador HTTP OMITE a chave quando não há ETag,
+      // e `PedidoDTO.versao` é obrigatório — sem esta opção o fake nunca produziria a
+      // forma sem `versao`, e um teste que ramifica em `'versao' in resultado` não
+      // poderia ser exercitado contra ele. Um fake que não alcança uma das formas do
+      // adaptador real não é intercambiável, que é a única coisa que a porta promete.
+      return opcoes.omitirVersao ? { pedido } : { pedido, versao: `"${pedido.versao}"` }
     },
   })
 }
