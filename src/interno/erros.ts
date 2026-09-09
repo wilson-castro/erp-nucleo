@@ -31,19 +31,33 @@ export class NaoEncontrado extends ErroDeAplicacao {
 
 export type Resposta<T> = { status: number; versao?: string; body?: T }
 
+/**
+ * `supportId` é o SEGUNDO campo que atravessa a fronteira de erro, e o único sem lista
+ * fechada. Sem esta validação ele é um canal aberto: o domínio põe ali o stacktrace que
+ * o `codigo` impediu de passar, e o teste que prova que `message` não vaza continua verde.
+ *
+ * Um identificador de suporte é opaco e curto. Qualquer coisa que não seja isso é
+ * descartada, não truncada — truncar entregaria os primeiros 64 caracteres do stacktrace.
+ */
+function sanitizarSupportId(v: unknown): string | undefined {
+  return typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : undefined
+}
+
 /** Um lugar só decide o que cada status significa. Nada do corpo do domínio atravessa. */
 export async function normalizar<T>(res: Response): Promise<Resposta<T>> {
   if (res.status === 401) throw new SessaoInvalida()
   if (res.status === 404) throw new NaoEncontrado()
   if (res.status === 403) throw new ErroDeAplicacao('OPERACAO_NAO_PERMITIDA')
   if (!res.ok) {
-    const b = (await res.json().catch(() => ({}))) as { codigo?: CodigoErro; supportId?: string }
-    if (res.status === 409) throw new Desatualizado(b.supportId)
-    // `codigo` só é aceito se for um código conhecido; qualquer outra coisa vira ERRO_INTERNO
+    const b = (await res.json().catch(() => ({}))) as { codigo?: unknown; supportId?: unknown }
+    const supportId = sanitizarSupportId(b.supportId)
+    if (res.status === 409) throw new Desatualizado(supportId)
+    // `DESTINO_INVALIDO` está FORA desta lista de propósito: é código interno do BFF,
+    // e o domínio não pode alegar um erro de uma camada que não é a dele.
     const conhecidos: CodigoErro[] = ['REGISTRO_DESATUALIZADO', 'OPERACAO_NAO_PERMITIDA',
-                                      'SESSAO_EXPIRADA', 'DESTINO_INVALIDO', 'ERRO_INTERNO']
-    const codigo = b.codigo && conhecidos.includes(b.codigo) ? b.codigo : 'ERRO_INTERNO'
-    throw new ErroDeAplicacao(codigo, b.supportId)
+                                      'SESSAO_EXPIRADA', 'ERRO_INTERNO']
+    const codigo = conhecidos.includes(b.codigo as CodigoErro) ? (b.codigo as CodigoErro) : 'ERRO_INTERNO'
+    throw new ErroDeAplicacao(codigo, supportId)
   }
   const etag = res.headers.get('etag')
   const body = (await res.json().catch(() => undefined)) as T | undefined
