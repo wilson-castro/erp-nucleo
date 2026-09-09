@@ -22,6 +22,15 @@ test('o fake lanca NaoEncontrado para id ausente', async () => {
   await assert.rejects(() => dados.lerPedido('9999'), NaoEncontrado)
 })
 
+test('o fake nao devolve propriedade herdada para id hostil', async () => {
+  // um lookup por indice devolveria Object.prototype.toString aqui, e o fake passaria
+  // a divergir do adaptador HTTP justamente nos ids que um atacante escolhe
+  const dados = dadosFake({ '8821': PEDIDO })({ obterToken: async () => 'x' })
+  for (const id of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+    await assert.rejects(() => dados.lerPedido(id), NaoEncontrado, `id ${id} vazou`)
+  }
+})
+
 test('o adaptador HTTP envia Bearer e nunca expoe o token no retorno', async () => {
   let autorizacaoVista = null
   const servidor = (await import('node:http')).createServer((req, res) => {
