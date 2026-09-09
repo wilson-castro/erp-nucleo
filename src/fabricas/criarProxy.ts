@@ -1,0 +1,39 @@
+import { NextResponse, type NextRequest } from 'next/server'
+
+export type ConfigDoProxy = {
+  /** prefixo da zona, ex.: '/pedidos' */
+  prefixo: string
+  /** para onde mandar quem não tem cookie, ex.: '/login' */
+  rotaLogin: string
+  nomeDoCookie?: string
+}
+
+/**
+ * Camada 1 das quatro verificações — e a única que roda em TODA requisição,
+ * inclusive prefetch de `<Link>`. Por isso faz ZERO I/O: só olha se o cookie
+ * existe. Um cookie forjado passa daqui, e a camada 2 o rejeita.
+ * Ver 06-seguranca.md §2.
+ */
+export function criarProxy(cfg: ConfigDoProxy) {
+  const nome = cfg.nomeDoCookie ?? '__Host-session'
+  return function proxy(req: NextRequest): NextResponse {
+    const nonce = crypto.randomUUID().replaceAll('-', '')
+
+    if (!req.cookies.has(nome)) {
+      // Location RELATIVO, de propósito. `NextResponse.redirect` exige URL absoluta e
+      // montaria http://localhost:3001/login — a origem da ZONA, que o navegador nunca
+      // deve ver. O usuário fala só com o shell. Um Location relativo é válido em HTTP
+      // e o navegador o resolve contra o documento atual, que é o shell.
+      const destino = `${cfg.rotaLogin}?de=${encodeURIComponent(req.nextUrl.pathname)}`
+      return new NextResponse(null, { status: 307, headers: { Location: destino } })
+    }
+
+    const headers = new Headers(req.headers)
+    headers.set('x-nonce', nonce)
+    const res = NextResponse.next({ request: { headers } })
+    res.headers.set('Content-Security-Policy',
+      `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; ` +
+      `style-src 'self' 'nonce-${nonce}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
+    return res
+  }
+}
