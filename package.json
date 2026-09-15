@@ -2,10 +2,17 @@
   "name": "@erp/nucleo",
   "version": "0.1.0",
   "type": "module",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./proxy": { "types": "./dist/fabricas/criarProxy.d.ts", "default": "./dist/fabricas/criarProxy.js" },
+    "./permissoes": { "types": "./dist/permissoes/index.d.ts", "default": "./dist/permissoes/index.js" },
+    "./testing": { "types": "./dist/testing/index.d.ts", "default": "./dist/testing/index.js" }
+  },
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm build && node --conditions react-server --test test/*.test.mjs",
+    "fronteira": "node scripts/fronteira.mjs",
+    "test": "pnpm build && pnpm fronteira && node --conditions react-server --test test/*.test.mjs",
     "publicar": "pnpm build && pnpm publish --no-git-checks --registry http://localhost:4873"
   },
   "dependencies": { "@erp/contratos": "0.1.0" },
