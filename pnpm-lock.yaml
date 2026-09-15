@@ -31,7 +31,7 @@ packages:
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
 
   '@erp/contratos@0.1.0':
-    resolution: {integrity: sha512-hxXtEuVL84P2bxuSnK4eeD8SODsOAzIa/MuDp26q9VSdEEjXt0lv9uKrpzGwTFSjbZnztGQ6uh2Xuak4MOAmYw==}
+    resolution: {integrity: sha512-iSAG/VbPo3m4BLvtvvjJPxBMI6Mdto3FcBqJ9/tBitrr0EiQpHI19rfd32p8cP0e1koQ1d+h48Rb4e906IAUHw==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}

@@ -1,6 +1,7 @@
 import 'server-only'
+import { randomUUID } from 'node:crypto'
 import type { FabricaDeDados, PortaDeDados } from '../portas/dados.js'
-import type { StoreDeSessao, Sessao, SessaoArmazenada } from '../portas/sessao.js'
+import type { StoreDeSessao, Sessao } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
 import { SessaoInvalida } from '../interno/erros.js'
 
@@ -27,10 +28,10 @@ export type Nucleo = {
   sessao: {
     atual(): Promise<Sessao | null>
     exigir(): Promise<Sessao>
-    abrir(id: string, s: SessaoArmazenada): Promise<void>
+    /** Autentica, cunha o id opaco, grava, e devolve **só o id**. */
+    entrar(credencial: unknown): Promise<string | null>
     encerrar(id: string): Promise<void>
   }
-  identidade: ProvedorDeIdentidade
 }
 
 export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
@@ -49,22 +50,38 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
     return s.accessToken
   }
 
+  // Função nomeada, não método: `exigir` chamava `this.atual()`, e destruturar
+  // `const { exigir } = nucleo.sessao` quebrava o `this`. O método que mais provavelmente
+  // protege uma rota era o mais frágil do arquivo.
+  const atual = async (): Promise<Sessao | null> => {
+    const s = await armazenada()
+    // projeta: token e qualquer campo futuro ficam para trás
+    return s ? { sub: s.sub, roles: s.roles } : null
+  }
+
   return {
     dados: cfg.dados({ obterToken }),
-    identidade: cfg.identidade,
     sessao: {
-      abrir: (id, s) => cfg.sessao.gravar(id, s),
-      encerrar: (id) => cfg.sessao.remover(id),
-      async atual() {
-        const s = await armazenada()
-        // projeta: token e qualquer campo futuro ficam para trás
-        return s ? { sub: s.sub, roles: s.roles } : null
-      },
+      atual,
       async exigir() {
-        const s = await this.atual()
+        const s = await atual()
         if (!s) throw new SessaoInvalida()
         return s
       },
+      /**
+       * `identidade` NÃO é exposto no `Nucleo`, e `entrar` é a razão. O provedor devolve
+       * `SessaoArmazenada` — com o `accessToken` dentro — e o único chamador legítimo
+       * disso é quem vai gravar a sessão. Fazendo a fábrica autenticar, cunhar o id e
+       * gravar, o token nunca chega a quem chama: o shell recebe um id opaco e mais nada.
+       */
+      async entrar(credencial) {
+        const s = await cfg.identidade.autenticar(credencial)
+        if (!s) return null
+        const id = randomUUID()
+        await cfg.sessao.gravar(id, s)
+        return id
+      },
+      encerrar: (id) => cfg.sessao.remover(id),
     },
   }
 }

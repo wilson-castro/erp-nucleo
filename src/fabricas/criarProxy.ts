@@ -19,6 +19,11 @@ export function criarProxy(cfg: ConfigDoProxy) {
   return function proxy(req: NextRequest): NextResponse {
     const nonce = crypto.randomUUID().replaceAll('-', '')
 
+    // Fora do próprio prefixo, a zona não opina. O `matcher` já deveria garantir isso;
+    // esta linha faz o proxy virar no-op se alguém configurar o matcher errado, em vez
+    // de a zona passar a redirecionar rota que não é dela.
+    if (!req.nextUrl.pathname.startsWith(cfg.prefixo)) return NextResponse.next()
+
     if (!req.cookies.has(nome)) {
       // Location RELATIVO, de propósito. `NextResponse.redirect` exige URL absoluta e
       // montaria http://localhost:3001/login — a origem da ZONA, que o navegador nunca
