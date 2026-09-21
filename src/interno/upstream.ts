@@ -1,6 +1,7 @@
 import 'server-only'
 import {
   DestinoInvalido,
+  ErroDeAplicacao,
   normalizar,
   type Resposta,
 } from './erros.js'
@@ -120,9 +121,10 @@ export function criarClienteDestino(
     }
 
     let corpo: string | undefined
-    if (opcoes.body !== undefined) {
+    const cargaUtil = opcoes.corpo !== undefined ? opcoes.corpo : opcoes.body
+    if (cargaUtil !== undefined) {
       headers.set('Content-Type', 'application/json')
-      corpo = JSON.stringify(opcoes.body)
+      corpo = JSON.stringify(cargaUtil)
     }
 
     if (opcoes.ifMatch) {
@@ -134,12 +136,15 @@ export function criarClienteDestino(
       headers,
       cache: 'no-store',
       signal: AbortSignal.timeout(timeoutMs),
-    }
-    if (corpo !== undefined) {
-      init.body = corpo
+      ...(corpo !== undefined ? { body: corpo } : {}),
     }
 
-    const res = await fetch(url, init)
+    let res: Response
+    try {
+      res = await fetch(url, init)
+    } catch {
+      throw new ErroDeAplicacao('ERRO_INTERNO')
+    }
 
     return normalizar<T>(res)
   }

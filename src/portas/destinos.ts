@@ -18,6 +18,7 @@ export type OpcoesRequisicao = {
   params?: Record<string, string | number>
   query?: Record<string, string | number | boolean | undefined>
   body?: unknown
+  corpo?: unknown
   ifMatch?: string
   headers?: Record<string, string>
 }

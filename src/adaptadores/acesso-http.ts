@@ -4,8 +4,15 @@ import type { PortaDeAcesso } from '../portas/acesso.js'
 import type { ClienteDestino } from '../portas/destinos.js'
 import { NaoEncontrado } from '../interno/erros.js'
 
-export function acessoHttp(destinoAcesso: ClienteDestino | { destino: string }): PortaDeAcesso {
-  const cliente = 'get' in destinoAcesso ? destinoAcesso : undefined
+export function acessoHttp(destinoAcesso: ClienteDestino | { destino: string }): PortaDeAcesso & { destino?: string } {
+  if ('destino' in destinoAcesso && !('get' in destinoAcesso)) {
+    return {
+      destino: destinoAcesso.destino,
+      async modulosPermitidos() { return [] },
+      async exigirModulo() { throw new NaoEncontrado() },
+    }
+  }
+  const cliente = destinoAcesso as ClienteDestino
   return {
     async modulosPermitidos(): Promise<readonly ModuloPermitido[]> {
       if (!cliente) return []

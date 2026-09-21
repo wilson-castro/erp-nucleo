@@ -13,6 +13,7 @@ import { criarClienteDestino } from '../interno/upstream.js'
 import { acessoHttp } from '../adaptadores/acesso-http.js'
 
 export type ConfigDoNucleo = {
+  app?: string
   sessao: LeitorDeSessao
   lerCookieDeSessao: () => Promise<string | undefined>
   destinos?: RegistroDeDestinos
@@ -24,7 +25,17 @@ export type ConfigDoNucleo = {
   identidade?: ProvedorDeIdentidade
 }
 
-export type Nucleo = PortaDeDestinos & {
+export type NucleoComAcesso = PortaDeDestinos & {
+  sessao: {
+    atual(): Promise<Sessao | null>
+    exigir(): Promise<Sessao>
+    entrar(credencial: unknown): Promise<string | null>
+    encerrar(id: string): Promise<void>
+  }
+  acesso: PortaDeAcesso
+}
+
+export type NucleoSemAcesso = PortaDeDestinos & {
   sessao: {
     atual(): Promise<Sessao | null>
     exigir(): Promise<Sessao>
@@ -34,7 +45,11 @@ export type Nucleo = PortaDeDestinos & {
   acesso?: PortaDeAcesso
 }
 
-export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
+export type Nucleo = NucleoSemAcesso
+
+export function criarNucleo(cfg: ConfigDoNucleo & { acesso: PortaDeAcesso | ((destinos: PortaDeDestinos) => PortaDeAcesso) | { destino: string } }): NucleoComAcesso
+export function criarNucleo(cfg: ConfigDoNucleo): NucleoSemAcesso
+export function criarNucleo(cfg: ConfigDoNucleo): any {
   const armazenada = async () => {
     const id = await cfg.lerCookieDeSessao()
     if (!id) return null
@@ -68,11 +83,11 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
   let portaAcesso: PortaDeAcesso | undefined
   if (typeof cfg.acesso === 'function') {
     portaAcesso = cfg.acesso(portaDestinos)
-  } else if (cfg.acesso && 'modulosPermitidos' in cfg.acesso) {
-    portaAcesso = cfg.acesso
-  } else if (cfg.acesso && 'destino' in cfg.acesso) {
+  } else if (cfg.acesso && 'destino' in cfg.acesso && cfg.acesso.destino) {
     const d = clientes.get(cfg.acesso.destino)
     if (d) portaAcesso = acessoHttp(d)
+  } else if (cfg.acesso && 'modulosPermitidos' in cfg.acesso) {
+    portaAcesso = cfg.acesso
   } else if (clientes.has('gestao-acesso')) {
     portaAcesso = acessoHttp(clientes.get('gestao-acesso')!)
   }

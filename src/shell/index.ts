@@ -1,5 +1,5 @@
 import 'server-only'
-import { criarNucleo, type ConfigDoNucleo, type Nucleo } from '../fabricas/criarNucleo.js'
+import { criarNucleo, type ConfigDoNucleo, type NucleoComAcesso } from '../fabricas/criarNucleo.js'
 import { sessaoArquivo } from '../adaptadores/sessao-arquivo.js'
 import { identidadeDev as criarIdentidadeDev } from '../adaptadores/identidade-dev.js'
 import type { StoreDeSessao } from '../portas/sessao.js'
@@ -19,10 +19,10 @@ export type ConfigDoNucleoDoShell = Omit<ConfigDoNucleo, 'identidade'> & {
   }
 }
 
-export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): Nucleo {
+export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoComAcesso {
   return criarNucleo({
     ...cfg,
     identidade: cfg.escrita.identidade,
     sessao: cfg.escrita.store,
-  })
+  }) as NucleoComAcesso
 }

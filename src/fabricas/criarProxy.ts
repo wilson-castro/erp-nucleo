@@ -30,12 +30,20 @@ export function criarProxy(cfg: ConfigDoProxy) {
       // deve ver. O usuário fala só com o shell. Um Location relativo é válido em HTTP
       // e o navegador o resolve contra o documento atual, que é o shell.
       const destino = `${cfg.rotaLogin}?de=${encodeURIComponent(req.nextUrl.pathname)}`
-      return new NextResponse(null, { status: 307, headers: { Location: destino } })
+      return NextResponse.redirect(new URL(destino, req.url), 307)
     }
 
     const headers = new Headers(req.headers)
     headers.set('x-nonce', nonce)
+    headers.set('x-erp-caminho', req.nextUrl.pathname)
+    headers.delete('x-erp-flash')
+    const flash = req.cookies.get('__Host-flash')?.value
+    if (flash) headers.set('x-erp-flash', flash)
+
     const res = NextResponse.next({ request: { headers } })
+    if (flash) {
+      res.cookies.set('__Host-flash', '', { path: '/', maxAge: 0 })
+    }
     res.headers.set('Content-Security-Policy',
       `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; ` +
       `style-src 'self' 'nonce-${nonce}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
