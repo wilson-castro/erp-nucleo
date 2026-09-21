@@ -1,5 +1,6 @@
 import 'server-only'
 import { DestinoInvalido, ErroDeAplicacao, SessaoInvalida, normalizar } from './erros.js'
+import { filhoDe } from '../borda/trace.js'
 import type {
   ClienteDeDestino, Destino, Metodo, OpcoesDeChamada, RegistroDeDestinos,
 } from '../portas/destinos.js'
@@ -89,6 +90,8 @@ export type ConfigDoTransporte = {
   registro: RegistroDeDestinos
   obterToken: () => Promise<string>
   tokenDeServico?: (() => string | undefined) | undefined
+  /** O `traceparent` da requisição atual (posto pelo proxy). Ausente: cada chamada abre um trace. */
+  lerTraceparent?: (() => Promise<string | undefined>) | undefined
   fetch?: typeof fetch
 }
 
@@ -103,6 +106,7 @@ export function criarTransporte(cfg: ConfigDoTransporte): (nome: string) => Clie
     const url = montarUrl(d, modelo, op)
 
     const headers = new Headers({ Accept: 'application/json', 'x-erp-chamador': cfg.app })
+    headers.set('traceparent', filhoDe(await cfg.lerTraceparent?.().catch(() => undefined)))
     if (d.credencial === 'usuario') headers.set('Authorization', `Bearer ${await cfg.obterToken()}`)
     if (d.credencial === 'servico') {
       const token = cfg.tokenDeServico?.()

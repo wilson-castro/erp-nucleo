@@ -1,4 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { politicaDeSeguranca } from '../borda/csp.js'
+import { garantirTraceparent } from '../borda/trace.js'
+
+// O shell tem proxy próprio (sonda, 503, telemetria) e usa as mesmas peças (ADR-0012).
+export { politicaDeSeguranca, garantirTraceparent }
 
 export type ConfigDoProxy = {
   /** prefixo da aplicação, ex.: '/zona1'. O shell usa '/'. */
@@ -50,9 +55,7 @@ export function criarProxy(cfg: ConfigDoProxy) {
     }
 
     const nonce = crypto.randomUUID().replaceAll('-', '')
-    const csp = `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; ` +
-      `style-src 'self' 'nonce-${nonce}'; img-src 'self' data:; object-src 'none'; ` +
-      `base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+    const csp = politicaDeSeguranca(nonce)
     // O nonce vai no cabeçalho CSP da requisição, que é onde a documentação do Next manda
     // pôr; o 16.3.4 também o acha só na resposta (auditor_base_1, X10), então isto é defensivo.
     const headers = new Headers(req.headers)
@@ -60,6 +63,8 @@ export function criarProxy(cfg: ConfigDoProxy) {
     headers.set('Content-Security-Policy', csp)
     // Layouts não recebem o caminho; a moldura precisa dele para marcar o módulo ativo.
     headers.set('x-erp-caminho', caminho)
+    // Núcleo 8: um trace por requisição; o registro de destinos manda um filho a cada domínio.
+    headers.set('traceparent', garantirTraceparent(req.headers.get('traceparent')))
     // Flash: o valor segue para o layout num cabeçalho interno e o cookie é apagado NESTA
     // resposta. Recarregar ou abrir outra zona não repete o toast, com ou sem JavaScript.
     const nomeFlash = cfg.nomeDoFlash ?? '__Host-flash'

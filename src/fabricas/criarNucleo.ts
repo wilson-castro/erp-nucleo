@@ -21,6 +21,8 @@ export type ConfigDoNucleo = {
   lerCookieDeSessao: () => Promise<string | undefined>
   /** Só para destinos com `credencial: 'servico'`, como o registro de manifesto. */
   tokenDeServico?: () => string | undefined
+  /** Núcleo 8: lê o `traceparent` que o proxy pôs na requisição (`headers().get('traceparent')`). */
+  lerTraceparent?: () => Promise<string | undefined>
 }
 
 /** Só o shell passa `escrita`. É o que faz dele o único escritor da sessão (N3). */
@@ -94,6 +96,7 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
 
   const destino = criarTransporte({
     app: cfg.app, registro: cfg.destinos, obterToken, tokenDeServico: cfg.tokenDeServico,
+    lerTraceparent: cfg.lerTraceparent,
   })
   const acesso = cfg.acesso({ destino })
   const modulosPermitidos = async () => {

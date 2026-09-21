@@ -5,11 +5,13 @@ const SRC = new URL('../src/', import.meta.url).pathname
 
 /** camada de origem -> camadas que ela PODE importar */
 // `interno` pode ler `portas` porque portas são só tipos: não há código para criar ciclo.
+// `borda`: código puro que roda no runtime de proxy do Next (CSP, trace); sem server-only.
 const PERMITIDO = {
-  interno:     ['interno', 'portas'],
+  borda:       ['borda'],
+  interno:     ['interno', 'portas', 'borda'],
   portas:      ['portas'],
   adaptadores: ['adaptadores', 'portas', 'interno'],
-  fabricas:    ['fabricas', 'adaptadores', 'portas', 'interno'],
+  fabricas:    ['fabricas', 'adaptadores', 'portas', 'interno', 'borda'],
   permissoes:  ['permissoes'],
   testing:     ['testing', 'portas', 'interno'],
   shell:       ['fabricas', 'adaptadores', 'portas'],
@@ -45,6 +47,9 @@ for (const arquivo of arquivos(SRC)) {
     if (!arquivo.endsWith('criarProxy.ts')) {
       erros.push(`${relative(SRC, arquivo)}: falta import 'server-only'`)
     }
+  }
+  if (origem === 'borda' && texto.includes("import 'server-only'")) {
+    erros.push(`${relative(SRC, arquivo)}: borda/ NAO pode ter server-only — roda no runtime de proxy`)
   }
   if (origem === 'permissoes' && texto.includes("import 'server-only'")) {
     erros.push(`${relative(SRC, arquivo)}: permissoes/ NAO pode ter server-only — as ilhas precisam dele`)
