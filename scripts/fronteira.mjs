@@ -4,8 +4,9 @@ import { join, relative } from 'node:path'
 const SRC = new URL('../src/', import.meta.url).pathname
 
 /** camada de origem -> camadas que ela PODE importar */
+// `interno` pode ler `portas` porque portas são só tipos: não há código para criar ciclo.
 const PERMITIDO = {
-  interno:     ['interno'],
+  interno:     ['interno', 'portas'],
   portas:      ['portas'],
   adaptadores: ['adaptadores', 'portas', 'interno'],
   fabricas:    ['fabricas', 'adaptadores', 'portas', 'interno'],

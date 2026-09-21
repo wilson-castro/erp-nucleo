@@ -6,103 +6,91 @@ import { join } from 'node:path'
 import { sessaoArquivo } from '../dist/adaptadores/sessao-arquivo.js'
 import { identidadeDev } from '../dist/adaptadores/identidade-dev.js'
 import { criarNucleo } from '../dist/fabricas/criarNucleo.js'
-import { dadosFake } from '../dist/testing/index.js'
+import { acessoFake } from '../dist/testing/index.js'
 import { SessaoInvalida } from '../dist/interno/erros.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'sessao-'))
+const viva = (sub, extra = {}) => ({ sub, nome: sub, accessToken: `tk-${sub}`, expiraEm: Date.now() + 60_000, ...extra })
 
-test('a sessao gravada por um processo e legivel por outro (arquivo, nao memoria)', async () => {
-  const a = sessaoArquivo({ dir })
-  const b = sessaoArquivo({ dir })   // instancia distinta = outro "processo"
-  await a.gravar('sid-1', { sub: 'gabrigas', roles: ['OPERADOR'],
-                            accessToken: 'tk', expiraEm: Date.now() + 60_000 })
-  const lida = await b.ler('sid-1')
-  assert.equal(lida.sub, 'gabrigas')
+const zona = (cookie) => criarNucleo({
+  app: 'zona', sessao: sessaoArquivo({ dir, modo: 'leitura' }), destinos: {},
+  acesso: acessoFake([]), lerCookieDeSessao: async () => cookie,
+})
+const shell = (cookie) => criarNucleo({
+  app: 'shell', sessao: sessaoArquivo({ dir, modo: 'leitura' }), destinos: {}, acesso: acessoFake([]),
+  lerCookieDeSessao: async () => cookie,
+  escrita: { store: sessaoArquivo({ dir, modo: 'escrita' }), identidade: identidadeDev() },
 })
 
-test('identidadeDev autentica os quatro atores do caso', async () => {
+test('a sessao gravada pelo shell e lida por uma zona (arquivo, nao memoria)', async () => {
+  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-1', viva('ana'))
+  assert.equal((await zona('sid-1').sessao.atual()).sub, 'ana')
+})
+
+test('o store em modo leitura nao tem como gravar nem remover (N3)', () => {
+  const leitor = sessaoArquivo({ dir, modo: 'leitura' })
+  assert.deepEqual(Object.keys(leitor), ['ler'])
+})
+
+test('o nucleo de zona nao tem entrar nem encerrar; o do shell tem', () => {
+  assert.deepEqual(Object.keys(zona().sessao).sort(), ['atual', 'exigir'])
+  assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'encerrar', 'entrar', 'exigir'])
+})
+
+test('identidadeDev autentica os atores de desenvolvimento e recusa o resto', async () => {
   const idp = identidadeDev()
-  for (const u of ['gabrigas', 'marina', 'rafael', 'carla']) {
+  for (const u of ['ana', 'bruno', 'carla', 'davi']) {
     const s = await idp.autenticar({ usuario: u })
     assert.equal(s.sub, u)
     assert.ok(s.accessToken.length > 0)
   }
-  assert.equal(await idp.autenticar({ usuario: 'ninguem' }), null)
+  for (const u of ['ninguem', '__proto__', 'constructor', 'toString']) {
+    assert.equal(await idp.autenticar({ usuario: u }), null, u)
+  }
 })
 
-test('identidadeDev recusa rodar em producao', async () => {
-  const antes = process.env.NODE_ENV
+test('identidadeDev recusa rodar em producao sem opt-in explicito', () => {
+  const antes = { ...process.env }
   process.env.NODE_ENV = 'production'
+  delete process.env.ERP_PERMITIR_IDENTIDADE_DEV
   try { assert.throws(() => identidadeDev(), /producao/i) }
-  finally { process.env.NODE_ENV = antes }
+  finally { process.env.NODE_ENV = antes.NODE_ENV; if (antes.ERP_PERMITIR_IDENTIDADE_DEV) process.env.ERP_PERMITIR_IDENTIDADE_DEV = antes.ERP_PERMITIR_IDENTIDADE_DEV }
 })
 
-test('a sessao entregue a aplicacao nao contem token nem grupos', async () => {
-  const store = sessaoArquivo({ dir })
-  await store.gravar('sid-2', { sub: 'marina', roles: ['OPERADOR'],
-                                accessToken: 'token-secreto', expiraEm: Date.now() + 60_000 })
-  const nucleo = criarNucleo({
-    dados: dadosFake({}),
-    sessao: store,
-    identidade: identidadeDev(),
-    lerCookieDeSessao: async () => 'sid-2',
-  })
-  const s = await nucleo.sessao.atual()
-  assert.deepEqual(Object.keys(s).sort(), ['roles', 'sub'])
+test('a sessao entregue a aplicacao so tem sub e nome', async () => {
+  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-2', viva('bruno', { accessToken: 'token-secreto', perfis: ['x'] }))
+  const s = await zona('sid-2').sessao.atual()
+  assert.deepEqual(Object.keys(s).sort(), ['nome', 'sub'])
   assert.ok(!JSON.stringify(s).includes('token-secreto'))
 })
 
 test('entrar() devolve so o id opaco — o token nao chega a quem chama', async () => {
-  const store = sessaoArquivo({ dir })
-  const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: store, identidade: identidadeDev(),
-    lerCookieDeSessao: async () => undefined,
-  })
-  const id = await nucleo.sessao.entrar({ usuario: 'marina' })
+  const n = shell()
+  const id = await n.sessao.entrar({ usuario: 'carla' })
   assert.equal(typeof id, 'string')
   assert.ok(!id.includes('dev.'), 'o id nao pode ser o token')
-
-  // a sessao ficou gravada, com o token, mas do lado do servidor
-  const guardada = await store.ler(id)
-  assert.equal(guardada.sub, 'marina')
-  assert.ok(guardada.accessToken.startsWith('dev.marina.'))
-
-  assert.equal(await nucleo.sessao.entrar({ usuario: 'ninguem' }), null)
+  const guardada = await sessaoArquivo({ dir, modo: 'leitura' }).ler(id)
+  assert.ok(guardada.accessToken.startsWith('dev.carla.'))
+  assert.equal(await n.sessao.entrar({ usuario: 'ninguem' }), null)
 })
 
-test('o Nucleo nao expoe nenhuma rota para o token', async () => {
-  const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: sessaoArquivo({ dir }),
-    identidade: identidadeDev(), lerCookieDeSessao: async () => undefined,
-  })
-  assert.deepEqual(Object.keys(nucleo).sort(), ['dados', 'sessao'])
-  assert.equal(nucleo.identidade, undefined, 'identidade daria autenticar() -> token cru')
-  assert.equal(nucleo.store, undefined, 'store daria ler() -> token cru')
+test('nenhum nucleo expoe store, identidade ou transporte cru', () => {
+  for (const n of [zona(), shell()]) {
+    assert.deepEqual(Object.keys(n).sort(), ['acesso', 'destino', 'sessao'])
+    assert.equal(n.store, undefined)
+    assert.equal(n.identidade, undefined)
+  }
 })
 
-test('exigir() e encerrar() funcionam destruturados', async () => {
-  const store = sessaoArquivo({ dir })
-  await store.gravar('sid-9', { sub: 'rafael', roles: ['ADMIN'],
-                                accessToken: 'tk', expiraEm: Date.now() + 60_000 })
-  const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: store, identidade: identidadeDev(),
-    lerCookieDeSessao: async () => 'sid-9',
-  })
-  // destruturar quebraria um metodo que dependesse de `this`
-  const { exigir, encerrar } = nucleo.sessao
-  assert.equal((await exigir()).sub, 'rafael')
-  await encerrar('sid-9')
-  assert.equal(await store.ler('sid-9'), null)
+test('encerrar no shell acaba a sessao na zona; exigir destruturado continua funcionando', async () => {
+  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-9', viva('davi'))
+  const { exigir } = zona('sid-9').sessao
+  assert.equal((await exigir()).sub, 'davi')
+  await shell('sid-9').sessao.encerrar('sid-9')
   await assert.rejects(() => exigir(), SessaoInvalida)
 })
 
 test('sessao expirada e tratada como ausente', async () => {
-  const store = sessaoArquivo({ dir })
-  await store.gravar('sid-3', { sub: 'carla', roles: [], accessToken: 'tk',
-                                expiraEm: Date.now() - 1 })
-  const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: store, identidade: identidadeDev(),
-    lerCookieDeSessao: async () => 'sid-3',
-  })
-  assert.equal(await nucleo.sessao.atual(), null)
+  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-3', viva('ana', { expiraEm: Date.now() - 1 }))
+  assert.equal(await zona('sid-3').sessao.atual(), null)
 })

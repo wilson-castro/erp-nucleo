@@ -1,12 +1,23 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
 export type ConfigDoProxy = {
-  /** prefixo da zona, ex.: '/pedidos' */
+  /** prefixo da aplicação, ex.: '/zona1'. O shell usa '/'. */
   prefixo: string
   /** para onde mandar quem não tem cookie, ex.: '/login' */
   rotaLogin: string
+  /** Caminhos que não exigem cookie, por prefixo. O shell põe aqui login e /api/auth/. */
+  publicos?: readonly string[]
+  /**
+   * Prefixos que pertencem a OUTRA aplicação. O shell põe aqui as zonas: a zona aplica
+   * o próprio proxy e a própria CSP, e duas CSPs com nonces diferentes bloqueariam os
+   * scripts da zona.
+   */
+  outrasAplicacoes?: readonly string[]
   nomeDoCookie?: string
 }
+
+const dentro = (caminho: string, prefixo: string) =>
+  prefixo === '/' || caminho === prefixo || caminho.startsWith(prefixo.endsWith('/') ? prefixo : `${prefixo}/`)
 
 /**
  * Camada 1 das quatro verificações — e a única que roda em TODA requisição,
@@ -17,28 +28,35 @@ export type ConfigDoProxy = {
 export function criarProxy(cfg: ConfigDoProxy) {
   const nome = cfg.nomeDoCookie ?? '__Host-session'
   return function proxy(req: NextRequest): NextResponse {
-    const nonce = crypto.randomUUID().replaceAll('-', '')
+    const caminho = req.nextUrl.pathname
+    // Fora do próprio prefixo, a aplicação não opina.
+    if (!dentro(caminho, cfg.prefixo)) return NextResponse.next()
+    if (cfg.outrasAplicacoes?.some((p) => dentro(caminho, p))) return NextResponse.next()
 
-    // Fora do próprio prefixo, a zona não opina. O `matcher` já deveria garantir isso;
-    // esta linha faz o proxy virar no-op se alguém configurar o matcher errado, em vez
-    // de a zona passar a redirecionar rota que não é dela.
-    if (!req.nextUrl.pathname.startsWith(cfg.prefixo)) return NextResponse.next()
-
-    if (!req.cookies.has(nome)) {
-      // Location RELATIVO, de propósito. `NextResponse.redirect` exige URL absoluta e
-      // montaria http://localhost:3001/login — a origem da ZONA, que o navegador nunca
-      // deve ver. O usuário fala só com o shell. Um Location relativo é válido em HTTP
-      // e o navegador o resolve contra o documento atual, que é o shell.
-      const destino = `${cfg.rotaLogin}?de=${encodeURIComponent(req.nextUrl.pathname)}`
-      return new NextResponse(null, { status: 307, headers: { Location: destino } })
+    const publico = cfg.publicos?.some((p) => dentro(caminho, p)) ?? false
+    if (!publico && !req.cookies.has(nome)) {
+      // O Next 16 recusa Location relativo vindo do proxy (`new URL(location)` sem base
+      // lança "Invalid URL" e a resposta vira 500). Monta-se a URL sobre a própria
+      // requisição, e o Next a devolve RELATIVA quando a origem coincide — assim a
+      // origem interna da zona nunca aparece para o navegador, que resolve o caminho
+      // contra o documento atual, servido pelo shell.
+      const destino = new URL(`${cfg.rotaLogin}?de=${encodeURIComponent(caminho)}`, req.url)
+      return NextResponse.redirect(destino, 307)
     }
 
+    const nonce = crypto.randomUUID().replaceAll('-', '')
+    const csp = `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; ` +
+      `style-src 'self' 'nonce-${nonce}'; img-src 'self' data:; object-src 'none'; ` +
+      `base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
+    // O Next lê o nonce do cabeçalho CSP da REQUISIÇÃO para marcar os próprios scripts.
+    // Só na resposta, a página chegaria com scripts sem nonce e o navegador os bloquearia.
     const headers = new Headers(req.headers)
     headers.set('x-nonce', nonce)
+    headers.set('Content-Security-Policy', csp)
+    // Layouts não recebem o caminho; a moldura precisa dele para marcar o módulo ativo.
+    headers.set('x-erp-caminho', caminho)
     const res = NextResponse.next({ request: { headers } })
-    res.headers.set('Content-Security-Policy',
-      `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; ` +
-      `style-src 'self' 'nonce-${nonce}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
+    res.headers.set('Content-Security-Policy', csp)
     return res
   }
 }

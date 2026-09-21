@@ -1,32 +1,21 @@
-import type { PedidoDTO } from '@erp/contratos'
-import type { FabricaDeDados } from '../portas/dados.js'
-import { NaoEncontrado } from '../interno/erros.js'
+import type { ModuloPermitido } from '@erp/contratos'
+import type { FabricaDeAcesso } from '../portas/acesso.js'
+import type { StoreDeSessao, SessaoArmazenada } from '../portas/sessao.js'
+
+/** Sem rede. Devolve sempre a mesma lista, como o domínio faria para um usuário fixo. */
+export function acessoFake(modulos: readonly ModuloPermitido[]): FabricaDeAcesso {
+  return () => ({ modulosPermitidos: async () => modulos })
+}
 
 /**
- * Sem rede, sem stub. Para testes que não precisam exercitar HTTP.
- *
- * O `Map` não é preferência de estilo. `pedidos[id]` com `id` vindo da URL devolve
- * propriedade **herdada** para `__proto__`, `constructor`, `toString` e afins — o fake
- * devolveria lixo em vez de lançar `NaoEncontrado`, divergindo do adaptador HTTP
- * exatamente nos ids que um atacante escolheria. Um fake que não se comporta como o
- * adaptador real destrói o propósito da porta: o teste passa e não prova nada sobre
- * produção.
+ * Store em memória para testes de uma aplicação só. `Map`, não objeto: um id hostil
+ * como `__proto__` não pode devolver propriedade herdada.
  */
-export function dadosFake(
-  pedidos: Record<string, PedidoDTO>,
-  opcoes: { omitirVersao?: boolean } = {},
-): FabricaDeDados {
-  const porId = new Map(Object.entries(pedidos))
-  return () => ({
-    async lerPedido(id) {
-      const pedido = porId.get(id)
-      if (!pedido) throw new NaoEncontrado()
-      // `omitirVersao` existe porque o adaptador HTTP OMITE a chave quando não há ETag,
-      // e `PedidoDTO.versao` é obrigatório — sem esta opção o fake nunca produziria a
-      // forma sem `versao`, e um teste que ramifica em `'versao' in resultado` não
-      // poderia ser exercitado contra ele. Um fake que não alcança uma das formas do
-      // adaptador real não é intercambiável, que é a única coisa que a porta promete.
-      return opcoes.omitirVersao ? { pedido } : { pedido, versao: `"${pedido.versao}"` }
-    },
-  })
+export function sessaoMemoria(): StoreDeSessao {
+  const m = new Map<string, SessaoArmazenada>()
+  return {
+    ler: async (id) => m.get(id) ?? null,
+    gravar: async (id, s) => { m.set(id, s) },
+    remover: async (id) => { m.delete(id) },
+  }
 }

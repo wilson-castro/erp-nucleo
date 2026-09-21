@@ -1,40 +1,67 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
-import type { FabricaDeDados, PortaDeDados } from '../portas/dados.js'
-import type { StoreDeSessao, Sessao } from '../portas/sessao.js'
+import type { ModuloPermitido } from '@erp/contratos'
+import type { LeitorDeSessao, EscritorDeSessao, Sessao } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
-import { SessaoInvalida } from '../interno/erros.js'
+import type { ClienteDeDestino, RegistroDeDestinos } from '../portas/destinos.js'
+import type { FabricaDeAcesso } from '../portas/acesso.js'
+import { criarTransporte } from '../interno/destinos.js'
+import { NaoEncontrado, SessaoInvalida } from '../interno/erros.js'
 
 export type ConfigDoNucleo = {
-  dados: FabricaDeDados
-  sessao: StoreDeSessao
-  identidade: ProvedorDeIdentidade
+  /** Nome da aplicação, enviado ao domínio no cabeçalho `x-erp-chamador`. */
+  app: string
+  sessao: LeitorDeSessao
+  destinos: RegistroDeDestinos
+  acesso: FabricaDeAcesso
   /**
    * Injetado em vez de importar `next/headers` aqui: mantém a fábrica testável
    * fora de um contexto de requisição do Next.
    */
   lerCookieDeSessao: () => Promise<string | undefined>
+  /** Só para destinos com `credencial: 'servico'`, como o registro de manifesto. */
+  tokenDeServico?: () => string | undefined
 }
 
-/**
- * `store` NÃO é exposto. O shell precisa abrir e encerrar sessão, não lê-la: expor o
- * `StoreDeSessao` inteiro daria a qualquer chamador o `ler()`, que devolve
- * `SessaoArmazenada` — com o `accessToken` dentro. O teste que prova que
- * `sessao.atual()` não vaza token continuaria verde enquanto `nucleo.store.ler()`
- * entregava o token ao lado.
- */
+/** Só o shell passa `escrita`. É o que faz dele o único escritor da sessão (N3). */
+export type ConfigDoNucleoDoShell = ConfigDoNucleo & {
+  escrita: { store: EscritorDeSessao; identidade: ProvedorDeIdentidade }
+}
+
 export type Nucleo = {
-  dados: PortaDeDados
   sessao: {
     atual(): Promise<Sessao | null>
     exigir(): Promise<Sessao>
+  }
+  /** Cliente de um destino declarado. Nome fora do registro lança `DestinoInvalido`. */
+  destino(nome: string): ClienteDeDestino
+  acesso: {
+    modulosPermitidos(): Promise<readonly ModuloPermitido[]>
+    /**
+     * Camada 2 de acesso a módulo. Módulo não permitido lança `NaoEncontrado`, que a
+     * aplicação traduz para `notFound()`: módulo restrito não revela que existe (D6).
+     */
+    exigirModulo(id: string): Promise<void>
+  }
+}
+
+/**
+ * `store` e `identidade` NÃO são expostos. `identidade.autenticar` devolve a sessão com
+ * o `accessToken` dentro, e `store.ler` também. Fazendo a fábrica autenticar, cunhar o id
+ * e gravar, o token nunca chega a quem chama: o shell recebe um id opaco e mais nada.
+ */
+export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
+  sessao: Nucleo['sessao'] & {
     /** Autentica, cunha o id opaco, grava, e devolve **só o id**. */
     entrar(credencial: unknown): Promise<string | null>
+    /** Remove do store: a sessão acaba em todas as zonas na próxima requisição. */
     encerrar(id: string): Promise<void>
   }
 }
 
-export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
+export function criarNucleo(cfg: ConfigDoNucleoDoShell): NucleoDoShell
+export function criarNucleo(cfg: ConfigDoNucleo): Nucleo
+export function criarNucleo(cfg: ConfigDoNucleo | ConfigDoNucleoDoShell): Nucleo | NucleoDoShell {
   const armazenada = async () => {
     const id = await cfg.lerCookieDeSessao()
     if (!id) return null
@@ -50,38 +77,54 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
     return s.accessToken
   }
 
-  // Função nomeada, não método: `exigir` chamava `this.atual()`, e destruturar
-  // `const { exigir } = nucleo.sessao` quebrava o `this`. O método que mais provavelmente
-  // protege uma rota era o mais frágil do arquivo.
+  // Funções nomeadas, não métodos: destruturar `const { exigir } = nucleo.sessao` não
+  // pode quebrar o `this` do método que mais provavelmente protege uma rota.
   const atual = async (): Promise<Sessao | null> => {
     const s = await armazenada()
     // projeta: token e qualquer campo futuro ficam para trás
-    return s ? { sub: s.sub, roles: s.roles } : null
+    return s ? { sub: s.sub, nome: s.nome } : null
+  }
+  const exigir = async (): Promise<Sessao> => {
+    const s = await atual()
+    if (!s) throw new SessaoInvalida()
+    return s
   }
 
-  return {
-    dados: cfg.dados({ obterToken }),
-    sessao: {
-      atual,
-      async exigir() {
-        const s = await atual()
-        if (!s) throw new SessaoInvalida()
-        return s
+  const destino = criarTransporte({
+    app: cfg.app, registro: cfg.destinos, obterToken, tokenDeServico: cfg.tokenDeServico,
+  })
+  const acesso = cfg.acesso({ destino })
+  const modulosPermitidos = async () => {
+    await exigir()
+    return acesso.modulosPermitidos()
+  }
+
+  const nucleo: Nucleo = {
+    sessao: { atual, exigir },
+    destino,
+    acesso: {
+      modulosPermitidos,
+      async exigirModulo(id) {
+        const permitidos = await modulosPermitidos()
+        if (!permitidos.some((m) => m.id === id)) throw new NaoEncontrado()
       },
-      /**
-       * `identidade` NÃO é exposto no `Nucleo`, e `entrar` é a razão. O provedor devolve
-       * `SessaoArmazenada` — com o `accessToken` dentro — e o único chamador legítimo
-       * disso é quem vai gravar a sessão. Fazendo a fábrica autenticar, cunhar o id e
-       * gravar, o token nunca chega a quem chama: o shell recebe um id opaco e mais nada.
-       */
+    },
+  }
+  if (!('escrita' in cfg)) return nucleo
+
+  const { store, identidade } = cfg.escrita
+  return {
+    ...nucleo,
+    sessao: {
+      ...nucleo.sessao,
       async entrar(credencial) {
-        const s = await cfg.identidade.autenticar(credencial)
+        const s = await identidade.autenticar(credencial)
         if (!s) return null
         const id = randomUUID()
-        await cfg.sessao.gravar(id, s)
+        await store.gravar(id, s)
         return id
       },
-      encerrar: (id) => cfg.sessao.remover(id),
+      encerrar: (id) => store.remover(id),
     },
   }
 }

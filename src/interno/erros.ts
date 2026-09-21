@@ -45,6 +45,11 @@ function sanitizarSupportId(v: unknown): string | undefined {
 
 /** Um lugar só decide o que cada status significa. Nada do corpo do domínio atravessa. */
 export async function normalizar<T>(res: Response): Promise<Resposta<T>> {
+  // `redirect: 'manual'` devolve o 3xx cru (ou `opaqueredirect`, status 0). Nenhum dos
+  // dois é resposta do recurso solicitado.
+  if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+    throw new ErroDeAplicacao('ERRO_INTERNO')
+  }
   if (res.status === 401) throw new SessaoInvalida()
   if (res.status === 404) throw new NaoEncontrado()
   if (res.status === 403) throw new ErroDeAplicacao('OPERACAO_NAO_PERMITIDA')

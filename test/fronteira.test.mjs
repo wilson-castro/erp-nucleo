@@ -26,14 +26,25 @@ test('interno e adaptadores nao sao alcancaveis de fora', () => {
 
 test('a raiz exporta as fabricas e os adaptadores nomeados', async () => {
   const m = await import('../dist/index.js')
-  for (const nome of ['criarNucleo', 'dadosHttp',
+  for (const nome of ['criarNucleo', 'acessoHttp',
                       'sessaoArquivo', 'identidadeDev', 'ErroDeAplicacao']) {
     assert.equal(typeof m[nome], 'function', `${nome} ausente na raiz`)
   }
 })
 
-test('a raiz NAO exporta upstream nem resolverDestino', async () => {
+test('a raiz NAO exporta o transporte cru', async () => {
   const m = await import('../dist/index.js')
-  assert.equal(m.upstream, undefined, 'upstream vazou para a superficie publica')
-  assert.equal(m.resolverDestino, undefined, 'resolverDestino vazou')
+  for (const nome of ['criarTransporte', 'montarUrl', 'validarRegistro', 'normalizar']) {
+    assert.equal(m[nome], undefined, `${nome} vazou para a superficie publica`)
+  }
+})
+
+test('o nucleo nao conhece dominio: nenhum arquivo fala de pedido', async () => {
+  const { readdirSync, readFileSync, statSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const src = new URL('../src/', import.meta.url).pathname
+  const todos = (d) => readdirSync(d).flatMap((n) => statSync(join(d, n)).isDirectory() ? todos(join(d, n)) : [join(d, n)])
+  for (const f of todos(src)) {
+    assert.ok(!/pedido/i.test(readFileSync(f, 'utf8')), `${f} menciona pedido`)
+  }
 })
