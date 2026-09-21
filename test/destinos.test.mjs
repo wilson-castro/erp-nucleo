@@ -1,14 +1,20 @@
-import { test } from 'node:test'
+import { test as testNode, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { criarTransporte, validarRegistro, DestinoInvalido } from '../dist/interno/destinos.js'
 import { ErroDeAplicacao, SessaoInvalida } from '../dist/interno/erros.js'
+
+// Timeout por teste e fechamento garantido: um assert que falha não pode deixar a suíte pendurada.
+const test = (nome, fn) => testNode(nome, { timeout: 5000 }, fn)
+const abertos = []
+after(() => { for (const s of abertos) { s.closeAllConnections(); s.close() } })
 
 /** Servidor REAL que registra o que recebeu. Sem ele, um teste passaria por ECONNREFUSED. */
 async function servidor(responder = (req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}') }) {
   const recebidas = []
   const s = createServer((req, res) => { recebidas.push({ metodo: req.method, url: req.url, headers: req.headers }); responder(req, res) })
   await new Promise((r) => s.listen(0, '127.0.0.1', r))
+  abertos.push(s)
   return { origem: `http://127.0.0.1:${s.address().port}`, recebidas, fechar: () => s.close() }
 }
 
@@ -46,24 +52,30 @@ test('cenario 1: zona com dois dominios; caminho nao declarado falha com Destino
   a.fechar(); b.fechar()
 })
 
+// Valores que o núcleo TEM de recusar antes da rede: tirariam a chamada do modelo.
+for (const [caso, id] of [
+  ['segmento ponto', '.'], ['segmento ponto-ponto', '..'], ['vazio', ''],
+  ['byte de controle TAB', 'a\tb'], ['byte de controle LF', 'a\nb'], ['byte nulo', 'a\u0000'],
+  ['longo demais', 'x'.repeat(257)],
+]) {
+  test(`parametro hostil (${caso}) e recusado com DestinoInvalido, sem rede`, async () => {
+    const a = await servidor()
+    const { destino, chamadasDeRede } = transporte(registro(a.origem, a.origem))
+    await assert.rejects(() => destino('dominio-a').get('/v1/recursos/:id', { params: { id } }), DestinoInvalido)
+    assert.equal(chamadasDeRede(), 0)
+  })
+}
+
+// Valores que viram UM segmento codificado: chegam ao domínio exatamente dentro do modelo.
 for (const [caso, id] of [
   ['barra dupla', '//evil.com'], ['barra', 'a/b'], ['barra invertida', '\\evil.com'],
-  ['segmento ponto', '.'], ['segmento ponto-ponto', '..'],
-  ['byte de controle TAB', 'a\tb'], ['byte de controle LF', 'a\nb'], ['byte nulo', 'a\u0000'],
-  ['vazio', ''], ['URL absoluta', 'http://evil.com/x'],
+  ['URL absoluta', 'http://evil.com/x'], ['ponto-ponto codificado', '%2e%2e'],
 ]) {
-  test(`parametro hostil (${caso}) nunca sai do modelo nem da origem`, async () => {
+  test(`parametro hostil (${caso}) vira um segmento codificado, na origem declarada`, async () => {
     const a = await servidor()
     const { destino } = transporte(registro(a.origem, a.origem))
-    try {
-      await destino('dominio-a').get('/v1/recursos/:id', { params: { id } })
-    } catch (e) {
-      assert.ok(e instanceof DestinoInvalido, `${caso}: ${e}`)
-    }
-    for (const r of a.recebidas) {
-      assert.match(r.url, /^\/v1\/recursos\/[^/]+$/, `${caso} escapou para ${r.url}`)
-    }
-    a.fechar()
+    await destino('dominio-a').get('/v1/recursos/:id', { params: { id } })
+    assert.deepEqual(a.recebidas.map((r) => r.url), [`/v1/recursos/${encodeURIComponent(id)}`])
   })
 }
 

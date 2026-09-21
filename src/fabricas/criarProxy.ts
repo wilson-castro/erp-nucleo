@@ -14,7 +14,12 @@ export type ConfigDoProxy = {
    */
   outrasAplicacoes?: readonly string[]
   nomeDoCookie?: string
+  /** Cookie de toast entre documentos. O proxy o consome: aparece em UM documento só. */
+  nomeDoFlash?: string
 }
+
+/** Cabeçalho interno pelo qual o proxy entrega o flash ao layout. Vindo de fora, é apagado. */
+export const CABECALHO_FLASH = 'x-erp-flash'
 
 const dentro = (caminho: string, prefixo: string) =>
   prefixo === '/' || caminho === prefixo || caminho.startsWith(prefixo.endsWith('/') ? prefixo : `${prefixo}/`)
@@ -48,15 +53,22 @@ export function criarProxy(cfg: ConfigDoProxy) {
     const csp = `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'; ` +
       `style-src 'self' 'nonce-${nonce}'; img-src 'self' data:; object-src 'none'; ` +
       `base-uri 'none'; form-action 'self'; frame-ancestors 'none'`
-    // O Next lê o nonce do cabeçalho CSP da REQUISIÇÃO para marcar os próprios scripts.
-    // Só na resposta, a página chegaria com scripts sem nonce e o navegador os bloquearia.
+    // O nonce vai no cabeçalho CSP da requisição, que é onde a documentação do Next manda
+    // pôr; o 16.3.4 também o acha só na resposta (auditor_base_1, X10), então isto é defensivo.
     const headers = new Headers(req.headers)
     headers.set('x-nonce', nonce)
     headers.set('Content-Security-Policy', csp)
     // Layouts não recebem o caminho; a moldura precisa dele para marcar o módulo ativo.
     headers.set('x-erp-caminho', caminho)
+    // Flash: o valor segue para o layout num cabeçalho interno e o cookie é apagado NESTA
+    // resposta. Recarregar ou abrir outra zona não repete o toast, com ou sem JavaScript.
+    const nomeFlash = cfg.nomeDoFlash ?? '__Host-flash'
+    headers.delete(CABECALHO_FLASH)
+    const flash = req.cookies.get(nomeFlash)?.value
+    if (flash) headers.set(CABECALHO_FLASH, flash)
     const res = NextResponse.next({ request: { headers } })
     res.headers.set('Content-Security-Policy', csp)
+    if (flash) res.cookies.set(nomeFlash, '', { path: '/', secure: true, sameSite: 'lax', maxAge: 0 })
     return res
   }
 }

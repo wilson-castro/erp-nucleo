@@ -28,8 +28,8 @@ export function sessaoArquivo(cfg: { dir: string }): LeitorDeSessao {
 }
 
 /**
- * Escritor: só o shell. Publicado apenas em `@erp/nucleo/shell`, que o lint das zonas
- * proíbe importar (invariante 15). Não existe na raiz do pacote.
+ * Escritor: só o shell. Publicado apenas em `@erp/nucleo/shell`, que a verificação estática das
+ * zonas (`repos/verificacao`) proíbe importar (invariante 15). Não existe na raiz do pacote.
  */
 export function sessaoArquivoDeEscrita(cfg: { dir: string }): StoreDeSessao {
   const arquivo = arquivoDe(cfg.dir)
