@@ -4,9 +4,20 @@ import { readFileSync } from 'node:fs'
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-test('o pacote publica exatamente quatro subpaths', () => {
+test('o pacote publica exatamente cinco subpaths', () => {
   assert.deepEqual(Object.keys(pkg.exports).sort(),
-                   ['.', './permissoes', './proxy', './testing'])
+                   ['.', './permissoes', './proxy', './shell', './testing'])
+})
+
+test('invariante 15: a raiz nao entrega nada que escreva sessao ou autentique', async () => {
+  const m = await import('../dist/index.js')
+  for (const nome of ['criarNucleoDoShell', 'sessaoArquivoDeEscrita', 'identidadeDev', 'ATORES_DE_DESENVOLVIMENTO']) {
+    assert.equal(m[nome], undefined, `${nome} esta na raiz`)
+  }
+  const s = await import('../dist/shell/index.js')
+  for (const nome of ['criarNucleoDoShell', 'sessaoArquivoDeEscrita', 'identidadeDev']) {
+    assert.equal(typeof s[nome], 'function', `${nome} ausente em /shell`)
+  }
 })
 
 test('a raiz NAO arrasta next/server — senao o pacote nao carrega fora do Next', async () => {
@@ -26,8 +37,7 @@ test('interno e adaptadores nao sao alcancaveis de fora', () => {
 
 test('a raiz exporta as fabricas e os adaptadores nomeados', async () => {
   const m = await import('../dist/index.js')
-  for (const nome of ['criarNucleo', 'acessoHttp',
-                      'sessaoArquivo', 'identidadeDev', 'ErroDeAplicacao']) {
+  for (const nome of ['criarNucleo', 'acessoHttp', 'sessaoArquivo', 'ErroDeAplicacao']) {
     assert.equal(typeof m[nome], 'function', `${nome} ausente na raiz`)
   }
 })

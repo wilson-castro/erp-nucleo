@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sessaoArquivo } from '../dist/adaptadores/sessao-arquivo.js'
+import { sessaoArquivo, sessaoArquivoDeEscrita } from '../dist/adaptadores/sessao-arquivo.js'
 import { acessoHttp } from '../dist/adaptadores/acesso-http.js'
 import { criarNucleo } from '../dist/fabricas/criarNucleo.js'
 import { acessoFake } from '../dist/testing/index.js'
@@ -14,12 +14,12 @@ const dir = mkdtempSync(join(tmpdir(), 'acesso-'))
 const PAINEL = { id: 'zona1.painel', zona: 'zona1', rotulo: 'Painel', prefixo: '/zona1' }
 
 function nucleo(acesso, cookie = 'sid', destinos = {}) {
-  return criarNucleo({ app: 'zona1', sessao: sessaoArquivo({ dir, modo: 'leitura' }), destinos, acesso,
+  return criarNucleo({ app: 'zona1', sessao: sessaoArquivo({ dir }), destinos, acesso,
                        lerCookieDeSessao: async () => cookie })
 }
 
 test('exigirModulo passa para modulo permitido e lanca NaoEncontrado (404) para o resto', async () => {
-  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid', { sub: 'ana', nome: 'Ana', accessToken: 't', expiraEm: Date.now() + 60_000 })
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid', { sub: 'ana', nome: 'Ana', accessToken: 't', expiraEm: Date.now() + 60_000 })
   const n = nucleo(acessoFake([PAINEL]))
   await n.acesso.exigirModulo('zona1.painel')
   await assert.rejects(() => n.acesso.exigirModulo('zona1.relatorios'), NaoEncontrado)
@@ -39,7 +39,7 @@ test('acessoHttp pergunta ao dominio de gestao de acesso com a credencial do usu
     res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify([PAINEL]))
   })
   await new Promise((r) => s.listen(0, '127.0.0.1', r))
-  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-http', { sub: 'ana', nome: 'Ana', accessToken: 'tk-ana', expiraEm: Date.now() + 60_000 })
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid-http', { sub: 'ana', nome: 'Ana', accessToken: 'tk-ana', expiraEm: Date.now() + 60_000 })
   const n = nucleo(acessoHttp({ destino: 'gestao-acesso' }), 'sid-http', {
     'gestao-acesso': { origem: `http://127.0.0.1:${s.address().port}`, caminhos: ['/v1/modulos-permitidos'], metodos: ['GET'], credencial: 'usuario' },
   })

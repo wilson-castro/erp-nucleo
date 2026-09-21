@@ -8,19 +8,16 @@ import type { LeitorDeSessao, StoreDeSessao, SessaoArmazenada } from '../portas/
  * Adaptador de DESENVOLVIMENTO. Existe porque shell e zonas são processos distintos e
  * um store em memória não atravessa essa fronteira. Substituído por `sessaoRedis` antes
  * de produção — ADR-0002. Sem TTL ativo, sem replicação.
- *
- * `modo` é obrigatório e sem padrão: a zona declara que só lê, e o objeto que ela recebe
- * não tem `gravar` nem `remover` — nem em tempo de compilação, nem em execução.
  */
-export function sessaoArquivo(cfg: { dir: string; modo: 'leitura' }): LeitorDeSessao
-export function sessaoArquivo(cfg: { dir: string; modo: 'escrita' }): StoreDeSessao
-export function sessaoArquivo(cfg: { dir: string; modo: 'leitura' | 'escrita' }): LeitorDeSessao | StoreDeSessao {
-  mkdirSync(cfg.dir, { recursive: true })
+const arquivoDe = (dir: string) => (id: string) =>
   // o id da sessão nunca vira nome de arquivo cru: evita travessia de caminho
-  const arquivo = (id: string) =>
-    join(cfg.dir, `${createHash('sha256').update(id).digest('hex')}.json`)
+  join(dir, `${createHash('sha256').update(id).digest('hex')}.json`)
 
-  const leitor: LeitorDeSessao = {
+/** Leitor: o que toda aplicação recebe. Não tem `gravar` nem `remover`. */
+export function sessaoArquivo(cfg: { dir: string }): LeitorDeSessao {
+  mkdirSync(cfg.dir, { recursive: true })
+  const arquivo = arquivoDe(cfg.dir)
+  return {
     async ler(id) {
       const f = arquivo(id)
       if (!existsSync(f)) return null
@@ -28,9 +25,16 @@ export function sessaoArquivo(cfg: { dir: string; modo: 'leitura' | 'escrita' })
       catch { return null }
     },
   }
-  if (cfg.modo === 'leitura') return leitor
+}
+
+/**
+ * Escritor: só o shell. Publicado apenas em `@erp/nucleo/shell`, que o lint das zonas
+ * proíbe importar (invariante 15). Não existe na raiz do pacote.
+ */
+export function sessaoArquivoDeEscrita(cfg: { dir: string }): StoreDeSessao {
+  const arquivo = arquivoDe(cfg.dir)
   return {
-    ...leitor,
+    ...sessaoArquivo(cfg),
     async gravar(id, s) { writeFileSync(arquivo(id), JSON.stringify(s), { mode: 0o600 }) },
     async remover(id) { rmSync(arquivo(id), { force: true }) },
   }

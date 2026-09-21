@@ -59,9 +59,11 @@ export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
   }
 }
 
-export function criarNucleo(cfg: ConfigDoNucleoDoShell): NucleoDoShell
-export function criarNucleo(cfg: ConfigDoNucleo): Nucleo
-export function criarNucleo(cfg: ConfigDoNucleo | ConfigDoNucleoDoShell): Nucleo | NucleoDoShell {
+/**
+ * O núcleo de uma aplicação que só LÊ a sessão — toda zona. Mesmo que alguém passe
+ * `escrita` com um cast, este caminho não monta `entrar` nem `encerrar`.
+ */
+export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
   const armazenada = async () => {
     const id = await cfg.lerCookieDeSessao()
     if (!id) return null
@@ -99,7 +101,7 @@ export function criarNucleo(cfg: ConfigDoNucleo | ConfigDoNucleoDoShell): Nucleo
     return acesso.modulosPermitidos()
   }
 
-  const nucleo: Nucleo = {
+  return {
     sessao: { atual, exigir },
     destino,
     acesso: {
@@ -110,8 +112,13 @@ export function criarNucleo(cfg: ConfigDoNucleo | ConfigDoNucleoDoShell): Nucleo
       },
     },
   }
-  if (!('escrita' in cfg)) return nucleo
+}
 
+/**
+ * O núcleo do shell, único escritor da sessão (N3). Publicado só em `@erp/nucleo/shell`.
+ */
+export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
+  const nucleo = criarNucleo(cfg)
   const { store, identidade } = cfg.escrita
   return {
     ...nucleo,

@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { sessaoArquivo } from '../dist/adaptadores/sessao-arquivo.js'
+import { sessaoArquivo, sessaoArquivoDeEscrita } from '../dist/adaptadores/sessao-arquivo.js'
 import { identidadeDev } from '../dist/adaptadores/identidade-dev.js'
-import { criarNucleo } from '../dist/fabricas/criarNucleo.js'
+import { criarNucleo, criarNucleoDoShell } from '../dist/fabricas/criarNucleo.js'
 import { acessoFake } from '../dist/testing/index.js'
 import { SessaoInvalida } from '../dist/interno/erros.js'
 
@@ -13,27 +13,31 @@ const dir = mkdtempSync(join(tmpdir(), 'sessao-'))
 const viva = (sub, extra = {}) => ({ sub, nome: sub, accessToken: `tk-${sub}`, expiraEm: Date.now() + 60_000, ...extra })
 
 const zona = (cookie) => criarNucleo({
-  app: 'zona', sessao: sessaoArquivo({ dir, modo: 'leitura' }), destinos: {},
+  app: 'zona', sessao: sessaoArquivo({ dir }), destinos: {},
   acesso: acessoFake([]), lerCookieDeSessao: async () => cookie,
 })
-const shell = (cookie) => criarNucleo({
-  app: 'shell', sessao: sessaoArquivo({ dir, modo: 'leitura' }), destinos: {}, acesso: acessoFake([]),
+const shell = (cookie) => criarNucleoDoShell({
+  app: 'shell', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake([]),
   lerCookieDeSessao: async () => cookie,
-  escrita: { store: sessaoArquivo({ dir, modo: 'escrita' }), identidade: identidadeDev() },
+  escrita: { store: sessaoArquivoDeEscrita({ dir }), identidade: identidadeDev() },
 })
 
 test('a sessao gravada pelo shell e lida por uma zona (arquivo, nao memoria)', async () => {
-  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-1', viva('ana'))
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid-1', viva('ana'))
   assert.equal((await zona('sid-1').sessao.atual()).sub, 'ana')
 })
 
 test('o store em modo leitura nao tem como gravar nem remover (N3)', () => {
-  const leitor = sessaoArquivo({ dir, modo: 'leitura' })
+  const leitor = sessaoArquivo({ dir })
   assert.deepEqual(Object.keys(leitor), ['ler'])
 })
 
 test('o nucleo de zona nao tem entrar nem encerrar; o do shell tem', () => {
   assert.deepEqual(Object.keys(zona().sessao).sort(), ['atual', 'exigir'])
+  // nem com cast: criarNucleo ignora `escrita`
+  const forjado = criarNucleo({ app: 'z', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake([]),
+    lerCookieDeSessao: async () => undefined, escrita: { store: sessaoArquivoDeEscrita({ dir }), identidade: identidadeDev() } })
+  assert.deepEqual(Object.keys(forjado.sessao).sort(), ['atual', 'exigir'])
   assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'encerrar', 'entrar', 'exigir'])
 })
 
@@ -58,7 +62,7 @@ test('identidadeDev recusa rodar em producao sem opt-in explicito', () => {
 })
 
 test('a sessao entregue a aplicacao so tem sub e nome', async () => {
-  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-2', viva('bruno', { accessToken: 'token-secreto', perfis: ['x'] }))
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid-2', viva('bruno', { accessToken: 'token-secreto', perfis: ['x'] }))
   const s = await zona('sid-2').sessao.atual()
   assert.deepEqual(Object.keys(s).sort(), ['nome', 'sub'])
   assert.ok(!JSON.stringify(s).includes('token-secreto'))
@@ -69,7 +73,7 @@ test('entrar() devolve so o id opaco — o token nao chega a quem chama', async 
   const id = await n.sessao.entrar({ usuario: 'carla' })
   assert.equal(typeof id, 'string')
   assert.ok(!id.includes('dev.'), 'o id nao pode ser o token')
-  const guardada = await sessaoArquivo({ dir, modo: 'leitura' }).ler(id)
+  const guardada = await sessaoArquivo({ dir }).ler(id)
   assert.ok(guardada.accessToken.startsWith('dev.carla.'))
   assert.equal(await n.sessao.entrar({ usuario: 'ninguem' }), null)
 })
@@ -83,7 +87,7 @@ test('nenhum nucleo expoe store, identidade ou transporte cru', () => {
 })
 
 test('encerrar no shell acaba a sessao na zona; exigir destruturado continua funcionando', async () => {
-  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-9', viva('davi'))
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid-9', viva('davi'))
   const { exigir } = zona('sid-9').sessao
   assert.equal((await exigir()).sub, 'davi')
   await shell('sid-9').sessao.encerrar('sid-9')
@@ -91,6 +95,6 @@ test('encerrar no shell acaba a sessao na zona; exigir destruturado continua fun
 })
 
 test('sessao expirada e tratada como ausente', async () => {
-  await sessaoArquivo({ dir, modo: 'escrita' }).gravar('sid-3', viva('ana', { expiraEm: Date.now() - 1 }))
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid-3', viva('ana', { expiraEm: Date.now() - 1 }))
   assert.equal(await zona('sid-3').sessao.atual(), null)
 })

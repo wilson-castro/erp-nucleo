@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@erp/contratos':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.1
+        version: 0.2.1
       next:
         specifier: ^16.0.0
         version: 16.3.4(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -30,8 +30,8 @@ packages:
   '@emnapi/runtime@1.11.3':
     resolution: {integrity: sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA==}
 
-  '@erp/contratos@0.2.0':
-    resolution: {integrity: sha512-lS0AsIQjBEoA/q/4D304eCwERGj0Tllvne6qUKkzDdqh8xReTJxwTz8ApMOrURlS0DMmvcStbvnSFD43uxUUDg==, tarball: http://localhost:4873/@erp/contratos/-/contratos-0.2.0.tgz}
+  '@erp/contratos@0.2.1':
+    resolution: {integrity: sha512-ty100oy1VqTdLb3IZfXzTjDvgwxAOjGyImjvsnQTgof6sUShiB2KQPVvy9qh+mj204FMkZUsVwxStgBww7OA0g==, tarball: http://localhost:4873/@erp/contratos/-/contratos-0.2.1.tgz}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -367,7 +367,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@erp/contratos@0.2.0': {}
+  '@erp/contratos@0.2.1': {}
 
   '@img/colour@1.1.0': {}
 

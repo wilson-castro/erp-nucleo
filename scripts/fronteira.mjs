@@ -12,6 +12,7 @@ const PERMITIDO = {
   fabricas:    ['fabricas', 'adaptadores', 'portas', 'interno'],
   permissoes:  ['permissoes'],
   testing:     ['testing', 'portas', 'interno'],
+  shell:       ['fabricas', 'adaptadores', 'portas'],
 }
 
 function arquivos(dir) {

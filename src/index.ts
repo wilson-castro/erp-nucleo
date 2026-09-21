@@ -2,18 +2,15 @@
 //
 // `criarProxy` NÃO entra aqui: ele importa o runtime do Next (server), e o Next 16 não publica campo
 // `exports`, então esse import não resolve sob ESM fora de um bundler. Vive em `@erp/nucleo/proxy`.
-export {
-  criarNucleo, type ConfigDoNucleo, type ConfigDoNucleoDoShell, type Nucleo, type NucleoDoShell,
-} from './fabricas/criarNucleo.js'
+//
+// O que ESCREVE sessão ou autentica (`criarNucleoDoShell`, `sessaoArquivoDeEscrita`,
+// `identidadeDev`) também não entra: vive em `@erp/nucleo/shell` (invariante 15).
+export { criarNucleo, type ConfigDoNucleo, type Nucleo } from './fabricas/criarNucleo.js'
 
 export { sessaoArquivo } from './adaptadores/sessao-arquivo.js'
-export { identidadeDev, ATORES_DE_DESENVOLVIMENTO } from './adaptadores/identidade-dev.js'
 export { acessoHttp } from './adaptadores/acesso-http.js'
 
-export type {
-  StoreDeSessao, LeitorDeSessao, EscritorDeSessao, SessaoArmazenada, Sessao,
-} from './portas/sessao.js'
-export type { ProvedorDeIdentidade } from './portas/identidade.js'
+export type { LeitorDeSessao, SessaoArmazenada, Sessao } from './portas/sessao.js'
 export type {
   Destino, RegistroDeDestinos, Metodo, OpcoesDeChamada, ClienteDeDestino, Resposta,
 } from './portas/destinos.js'
