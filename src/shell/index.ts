@@ -1,5 +1,5 @@
 // Superfície SÓ do shell: o que escreve sessão ou autentica. Uma zona que importe este
-// subpath viola o invariante 15; a verificação estática de `repos/verificacao` reprova o import.
+// subpath viola o invariante 15; a verificação estática de `base/verificacao` reprova o import.
 export {
   criarNucleoDoShell, type ConfigDoNucleoDoShell, type NucleoDoShell,
 } from '../fabricas/criarNucleo.js'
