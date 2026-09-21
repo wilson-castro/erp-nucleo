@@ -47,7 +47,7 @@ test('a sessao entregue a aplicacao nao contem token nem grupos', async () => {
     lerCookieDeSessao: async () => 'sid-2',
   })
   const s = await nucleo.sessao.atual()
-  assert.deepEqual(Object.keys(s).sort(), ['roles', 'sub'])
+  assert.deepEqual(Object.keys(s).sort(), ['nome', 'roles', 'sub'])
   assert.ok(!JSON.stringify(s).includes('token-secreto'))
 })
 

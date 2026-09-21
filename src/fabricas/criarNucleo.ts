@@ -16,7 +16,7 @@ export type ConfigDoNucleo = {
   sessao: LeitorDeSessao
   lerCookieDeSessao: () => Promise<string | undefined>
   destinos?: RegistroDeDestinos
-  acesso?: PortaDeAcesso | ((destinos: PortaDeDestinos) => PortaDeAcesso)
+  acesso?: PortaDeAcesso | ((destinos: PortaDeDestinos) => PortaDeAcesso) | { destino: string }
   tokenServico?: string
   /**
    * Identidade e escrita de sessão são opcionais; usados pelo shell para autenticar.
@@ -68,15 +68,18 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
   let portaAcesso: PortaDeAcesso | undefined
   if (typeof cfg.acesso === 'function') {
     portaAcesso = cfg.acesso(portaDestinos)
-  } else if (cfg.acesso) {
+  } else if (cfg.acesso && 'modulosPermitidos' in cfg.acesso) {
     portaAcesso = cfg.acesso
+  } else if (cfg.acesso && 'destino' in cfg.acesso) {
+    const d = clientes.get(cfg.acesso.destino)
+    if (d) portaAcesso = acessoHttp(d)
   } else if (clientes.has('gestao-acesso')) {
     portaAcesso = acessoHttp(clientes.get('gestao-acesso')!)
   }
 
   const atual = async (): Promise<Sessao | null> => {
     const s = await armazenada()
-    return s ? { sub: s.sub, roles: s.roles } : null
+    return s ? { sub: s.sub, nome: s.sub, roles: s.roles } : null
   }
 
   const sessaoObj = {
@@ -91,7 +94,6 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
       const s = await cfg.identidade.autenticar(credencial)
       if (!s) return null
       const id = randomUUID()
-      // Apenas stores com gravar (StoreDeSessao) gravam
       const store = cfg.sessao as StoreDeSessao
       if (typeof store.gravar === 'function') {
         await store.gravar(id, s)

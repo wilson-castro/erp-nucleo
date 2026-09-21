@@ -10,7 +10,7 @@ export type SessaoArmazenada = {
  * O que a aplicação enxerga. Sem token e sem grupos: `roles` monta menu de contingência
  * ou ações de tela; o token nunca é visível para quem consome Sessao.
  */
-export type Sessao = { sub: string; roles: string[] }
+export type Sessao = { sub: string; nome: string; roles: string[] }
 
 export interface LeitorDeSessao {
   ler(id: string): Promise<SessaoArmazenada | null>

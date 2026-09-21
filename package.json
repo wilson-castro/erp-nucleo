@@ -1,12 +1,13 @@
 {
   "name": "@erp/nucleo",
-  "version": "0.1.0",
+  "version": "0.3.1",
   "type": "module",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
     "./proxy": { "types": "./dist/fabricas/criarProxy.d.ts", "default": "./dist/fabricas/criarProxy.js" },
     "./permissoes": { "types": "./dist/permissoes/index.d.ts", "default": "./dist/permissoes/index.js" },
-    "./testing": { "types": "./dist/testing/index.d.ts", "default": "./dist/testing/index.js" }
+    "./testing": { "types": "./dist/testing/index.d.ts", "default": "./dist/testing/index.js" },
+    "./shell": { "types": "./dist/shell/index.d.ts", "default": "./dist/shell/index.js" }
   },
   "files": ["dist"],
   "scripts": {

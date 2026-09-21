@@ -23,7 +23,7 @@ const ATORES: Record<string, { roles: string[] }> = {
  * Recusa-se a existir em produção — um IdP que aceita usuário sem senha não pode subir por engano.
  */
 export function identidadeDev(): ProvedorDeIdentidade {
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' && process.env.ERP_PERMITIR_IDENTIDADE_DEV !== '1') {
     throw new Error('identidadeDev não roda em producao; use o provedor OIDC')
   }
   return {

@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-test('o pacote publica exatamente quatro subpaths', () => {
+test('o pacote publica os subpaths permitidos', () => {
   assert.deepEqual(Object.keys(pkg.exports).sort(),
-                   ['.', './permissoes', './proxy', './testing'])
+                   ['.', './permissoes', './proxy', './shell', './testing'])
 })
 
 test('a raiz NAO arrasta next/server — senao o pacote nao carrega fora do Next', async () => {
