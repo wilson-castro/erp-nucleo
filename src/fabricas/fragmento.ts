@@ -3,7 +3,7 @@ import { ErroDeAplicacao } from '../interno/erros.js'
 
 /**
  * Fragmento entre zonas (ADR-0011): uma zona embute no HTML do servidor um bloco que outra
- * zona renderiza. Contrato HTTP em `docs/design-bff/mfe/02-zonas.md` §2.
+ * zona renderiza. Contrato HTTP em `docs/desenho/mfe/02-zonas.md` §2.
  */
 
 const VERSAO = '1'
