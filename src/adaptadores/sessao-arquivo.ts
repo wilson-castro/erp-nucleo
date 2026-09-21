@@ -6,8 +6,8 @@ import type { LeitorDeSessao, StoreDeSessao, SessaoArmazenada } from '../portas/
 
 /**
  * Adaptador de DESENVOLVIMENTO. Existe porque shell e zonas são processos distintos e
- * um store em memória não atravessa essa fronteira. Substituído por `sessaoRedis` antes
- * de produção — ADR-0002. Sem TTL ativo, sem replicação.
+ * um store em memória não atravessa essa fronteira. Em produção use `sessaoRedis`
+ * (ADR-0002). Sem TTL ativo, sem replicação.
  */
 const arquivoDe = (dir: string) => (id: string) =>
   // o id da sessão nunca vira nome de arquivo cru: evita travessia de caminho
