@@ -6,6 +6,10 @@
 // O que ESCREVE sessão ou autentica (`criarNucleoDoShell`, `sessaoArquivoDeEscrita`, `sessaoRedisDeEscrita`,
 // `identidadeDev`) também não entra: vive em `@erp/nucleo/shell` (invariante 15).
 export { criarNucleo, type ConfigDoNucleo, type Nucleo } from './fabricas/criarNucleo.js'
+export {
+  criarFragmento, responderFragmento,
+  type ConfigDoFragmento, type ClienteDeFragmento, type ZonaDona,
+} from './fabricas/fragmento.js'
 
 export { sessaoArquivo } from './adaptadores/sessao-arquivo.js'
 export { sessaoRedis, type ClienteRedis, type ConfigSessaoRedis } from './adaptadores/sessao-redis.js'
