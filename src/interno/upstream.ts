@@ -1,37 +1,155 @@
 import 'server-only'
-import { DestinoInvalido, normalizar, type Resposta } from './erros.js'
+import {
+  DestinoInvalido,
+  normalizar,
+  type Resposta,
+} from './erros.js'
 
 export { DestinoInvalido }
+import type {
+  DefinicaoDestino,
+  MetodoHttp,
+  OpcoesRequisicao,
+  RegistroDeDestinos,
+  ClienteDestino,
+} from '../portas/destinos.js'
 
 /**
- * Elemento 7 do núcleo. Nenhuma parte do destino vem do cliente, e o resultado
- * precisa continuar na mesma origem da base. Exigência da RFC 10017.
+ * Validação rigorosa do elemento 7 do núcleo e RFC 10017:
+ * - path deve começar com '/'
+ * - sem caminhos protocolo-relativos (//) ou barra invertida (/\\)
+ * - sem URLs absolutas para outro host
+ * - mesma origem da base
+ * - rejeição de bytes de controle (\t, \r, \n)
  */
 export function resolverDestino(base: URL, path: string): URL {
   if (!path.startsWith('/')) throw new DestinoInvalido()
   if (path.startsWith('//') || path.startsWith('/\\')) throw new DestinoInvalido()
   let url: URL
-  try { url = new URL(path, base) } catch { throw new DestinoInvalido() }
+  try {
+    url = new URL(path, base)
+  } catch {
+    throw new DestinoInvalido()
+  }
   if (url.origin !== base.origin) throw new DestinoInvalido()
   return url
 }
 
-export type OpcoesUpstream = RequestInit & { ifMatch?: string }
+export function montarCaminho(modelo: string, params: Record<string, string | number> = {}): string {
+  if (!modelo.startsWith('/')) throw new DestinoInvalido()
+  if (modelo.startsWith('//') || modelo.startsWith('/\\')) throw new DestinoInvalido()
 
-export async function upstream<T>(
-  cfg: { base: URL; obterToken: () => Promise<string> },
-  path: string,
-  init: OpcoesUpstream = {},
-): Promise<Resposta<T>> {
-  const url = resolverDestino(cfg.base, path)
-  const headers = new Headers(init.headers)
-  headers.set('Authorization', `Bearer ${await cfg.obterToken()}`)
-  headers.set('Accept', 'application/json')
-  if (init.body) headers.set('Content-Type', 'application/json')
-  if (init.ifMatch) headers.set('If-Match', init.ifMatch)
+  const partes = modelo.split('/')
+  const resultado: string[] = []
 
-  const res = await fetch(url, {
-    ...init, headers, cache: 'no-store', signal: AbortSignal.timeout(10_000),
-  })
-  return normalizar<T>(res)
+  for (const parte of partes) {
+    if (parte.startsWith(':')) {
+      const nomeParam = parte.slice(1)
+      const valor = params[nomeParam]
+      if (valor === undefined || valor === null) {
+        throw new DestinoInvalido()
+      }
+      const valorStr = String(valor)
+      // Dot-segment exato ou travessia
+      if (valorStr === '.' || valorStr === '..') {
+        throw new DestinoInvalido()
+      }
+      resultado.push(encodeURIComponent(valorStr))
+    } else {
+      if (parte === '.' || parte === '..') {
+        throw new DestinoInvalido()
+      }
+      resultado.push(parte)
+    }
+  }
+
+  return resultado.join('/')
+}
+
+export function criarClienteDestino(
+  nome: string,
+  definicao: DefinicaoDestino,
+  obterTokenUsuario: () => Promise<string>,
+  tokenServico?: string,
+): ClienteDestino {
+  let base: URL
+  try {
+    base = new URL(definicao.origem)
+  } catch {
+    throw new DestinoInvalido()
+  }
+
+  const timeoutMs = definicao.timeoutMs ?? 10_000
+
+  async function requisitar<T>(
+    caminhoModelo: string,
+    opcoes: OpcoesRequisicao = {},
+    metodo: MetodoHttp = 'GET',
+  ): Promise<Resposta<T>> {
+    if (!definicao.metodos.includes(metodo)) {
+      throw new DestinoInvalido()
+    }
+    if (!definicao.caminhos.includes(caminhoModelo)) {
+      throw new DestinoInvalido()
+    }
+
+    const caminhoResolvido = montarCaminho(caminhoModelo, opcoes.params)
+    let url = resolverDestino(base, caminhoResolvido)
+
+    if (opcoes.query) {
+      const sp = new URLSearchParams(url.search)
+      for (const [k, v] of Object.entries(opcoes.query)) {
+        if (v !== undefined) {
+          sp.set(k, String(v))
+        }
+      }
+      url = new URL(`${url.pathname}?${sp.toString()}`, url.origin)
+    }
+
+    const headers = new Headers(opcoes.headers)
+    headers.set('Accept', 'application/json')
+
+    const credencial = definicao.credencial ?? 'usuario'
+    if (credencial === 'usuario') {
+      const tk = await obterTokenUsuario()
+      headers.set('Authorization', `Bearer ${tk}`)
+    } else if (credencial === 'servico') {
+      if (tokenServico) {
+        headers.set('Authorization', `Bearer ${tokenServico}`)
+      }
+    }
+
+    let corpo: string | undefined
+    if (opcoes.body !== undefined) {
+      headers.set('Content-Type', 'application/json')
+      corpo = JSON.stringify(opcoes.body)
+    }
+
+    if (opcoes.ifMatch) {
+      headers.set('If-Match', opcoes.ifMatch)
+    }
+
+    const init: RequestInit = {
+      method: metodo,
+      headers,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+    }
+    if (corpo !== undefined) {
+      init.body = corpo
+    }
+
+    const res = await fetch(url, init)
+
+    return normalizar<T>(res)
+  }
+
+  return {
+    requisitar,
+    get: (caminhoModelo, opcoes) => requisitar(caminhoModelo, opcoes, 'GET'),
+    post: (caminhoModelo, opcoes) => requisitar(caminhoModelo, opcoes, 'POST'),
+    put: (caminhoModelo, opcoes) => requisitar(caminhoModelo, opcoes, 'PUT'),
+    patch: (caminhoModelo, opcoes) => requisitar(caminhoModelo, opcoes, 'PATCH'),
+    delete: (caminhoModelo, opcoes) => requisitar(caminhoModelo, opcoes, 'DELETE'),
+  }
 }

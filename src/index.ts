@@ -6,17 +6,32 @@
 // próprio pacote. Vive em `@erp/nucleo/proxy`.
 export { criarNucleo, type ConfigDoNucleo, type Nucleo } from './fabricas/criarNucleo.js'
 
-export { dadosHttp } from './adaptadores/dados-http.js'
 export { sessaoArquivo } from './adaptadores/sessao-arquivo.js'
 export { identidadeDev } from './adaptadores/identidade-dev.js'
+export { acessoHttp } from './adaptadores/acesso-http.js'
 
-export type { PortaDeDados, FabricaDeDados, ObterToken } from './portas/dados.js'
-export type { StoreDeSessao, SessaoArmazenada, Sessao } from './portas/sessao.js'
+export type {
+  MetodoHttp,
+  TipoCredencial,
+  DefinicaoDestino,
+  RegistroDeDestinos,
+  OpcoesRequisicao,
+  RespostaDestino,
+  ClienteDestino,
+  PortaDeDestinos,
+} from './portas/destinos.js'
+
+export type { StoreDeSessao, LeitorDeSessao, SessaoArmazenada, Sessao } from './portas/sessao.js'
 export type { ProvedorDeIdentidade } from './portas/identidade.js'
+export type { PortaDeAcesso } from './portas/acesso.js'
 
 export {
-  ErroDeAplicacao, SessaoInvalida, Desatualizado, DestinoInvalido, NaoEncontrado,
+  ErroDeAplicacao,
+  SessaoInvalida,
+  Desatualizado,
+  DestinoInvalido,
+  NaoEncontrado,
 } from './interno/erros.js'
 
-// `upstream` e `resolverDestino` NÃO são exportados: uma zona que os alcançasse
+// `upstream`, `resolverDestino` e `montarCaminho` NÃO são exportados: uma zona que os alcançasse
 // contornaria a allowlist do elemento 7.

@@ -5,7 +5,7 @@ const SRC = new URL('../src/', import.meta.url).pathname
 
 /** camada de origem -> camadas que ela PODE importar */
 const PERMITIDO = {
-  interno:     ['interno'],
+  interno:     ['interno', 'portas'],
   portas:      ['portas'],
   adaptadores: ['adaptadores', 'portas', 'interno'],
   fabricas:    ['fabricas', 'adaptadores', 'portas', 'interno'],

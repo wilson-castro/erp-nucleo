@@ -1,32 +1,87 @@
-import type { PedidoDTO } from '@erp/contratos'
-import type { FabricaDeDados } from '../portas/dados.js'
-import { NaoEncontrado } from '../interno/erros.js'
+import 'server-only'
+import type { ModuloPermitido } from '@erp/contratos'
+import type { PortaDeAcesso } from '../portas/acesso.js'
+import type {
+  PortaDeDestinos,
+  ClienteDestino,
+  RespostaDestino,
+  OpcoesRequisicao,
+} from '../portas/destinos.js'
+import type { StoreDeSessao, SessaoArmazenada } from '../portas/sessao.js'
+import { NaoEncontrado, DestinoInvalido } from '../interno/erros.js'
 
 /**
- * Sem rede, sem stub. Para testes que não precisam exercitar HTTP.
- *
- * O `Map` não é preferência de estilo. `pedidos[id]` com `id` vindo da URL devolve
- * propriedade **herdada** para `__proto__`, `constructor`, `toString` e afins — o fake
- * devolveria lixo em vez de lançar `NaoEncontrado`, divergindo do adaptador HTTP
- * exatamente nos ids que um atacante escolheria. Um fake que não se comporta como o
- * adaptador real destrói o propósito da porta: o teste passa e não prova nada sobre
- * produção.
+ * Fake in-memory session store para testes unitários de zonas e do shell.
  */
-export function dadosFake(
-  pedidos: Record<string, PedidoDTO>,
-  opcoes: { omitirVersao?: boolean } = {},
-): FabricaDeDados {
-  const porId = new Map(Object.entries(pedidos))
-  return () => ({
-    async lerPedido(id) {
-      const pedido = porId.get(id)
-      if (!pedido) throw new NaoEncontrado()
-      // `omitirVersao` existe porque o adaptador HTTP OMITE a chave quando não há ETag,
-      // e `PedidoDTO.versao` é obrigatório — sem esta opção o fake nunca produziria a
-      // forma sem `versao`, e um teste que ramifica em `'versao' in resultado` não
-      // poderia ser exercitado contra ele. Um fake que não alcança uma das formas do
-      // adaptador real não é intercambiável, que é a única coisa que a porta promete.
-      return opcoes.omitirVersao ? { pedido } : { pedido, versao: `"${pedido.versao}"` }
+export function sessaoFake(inicial: Record<string, SessaoArmazenada> = {}): StoreDeSessao {
+  const store = new Map<string, SessaoArmazenada>(Object.entries(inicial))
+  return {
+    async ler(id: string) {
+      return store.get(id) ?? null
     },
-  })
+    async gravar(id: string, s: SessaoArmazenada) {
+      store.set(id, s)
+    },
+    async remover(id: string) {
+      store.delete(id)
+    },
+  }
+}
+
+/**
+ * Fake access port para testes de controle de acesso de zonas.
+ */
+export function acessoFake(modulos: readonly ModuloPermitido[]): PortaDeAcesso {
+  return {
+    async modulosPermitidos() {
+      return modulos
+    },
+    async exigirModulo(prefixoOuId: string) {
+      const achado = modulos.find(
+        (m) => m.id === prefixoOuId || m.prefixo === prefixoOuId || prefixoOuId.startsWith(`${m.prefixo}/`),
+      )
+      if (!achado) throw new NaoEncontrado()
+      return achado
+    },
+  }
+}
+
+export type HandlerDestinoFake = (opcoes: OpcoesRequisicao) => RespostaDestino<unknown> | Promise<RespostaDestino<unknown>>
+
+/**
+ * Fake destinations port para testes de integração e unitários de zonas sem rede.
+ */
+export function destinosFake(
+  rotasPorDestino: Record<string, Record<string, HandlerDestinoFake | unknown>>,
+): PortaDeDestinos {
+  return {
+    destino(nome: string): ClienteDestino {
+      const rotas = rotasPorDestino[nome]
+      if (!rotas) throw new DestinoInvalido()
+
+      async function executar<T>(caminhoModelo: string, opcoes: OpcoesRequisicao = {}): Promise<RespostaDestino<T>> {
+        const handler = rotas[caminhoModelo]
+        if (handler === undefined) throw new DestinoInvalido()
+
+        if (typeof handler === 'function') {
+          const res = await (handler as HandlerDestinoFake)(opcoes)
+          return res as RespostaDestino<T>
+        }
+
+        return {
+          status: 200,
+          body: handler as T,
+        }
+      }
+
+      return {
+        requisitar: executar,
+        get: executar,
+        post: executar,
+        put: executar,
+        patch: executar,
+        delete: executar,
+      }
+    },
+  }
 }

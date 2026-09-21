@@ -26,7 +26,7 @@ test('interno e adaptadores nao sao alcancaveis de fora', () => {
 
 test('a raiz exporta as fabricas e os adaptadores nomeados', async () => {
   const m = await import('../dist/index.js')
-  for (const nome of ['criarNucleo', 'dadosHttp',
+  for (const nome of ['criarNucleo', 'acessoHttp',
                       'sessaoArquivo', 'identidadeDev', 'ErroDeAplicacao']) {
     assert.equal(typeof m[nome], 'function', `${nome} ausente na raiz`)
   }

@@ -7,14 +7,16 @@ export type SessaoArmazenada = {
 }
 
 /**
- * O que a aplicação enxerga. Sem token e sem grupos: `roles` monta menu, que é
- * decisão do cliente sobre si mesmo; grupos são insumo de autorização, e
- * autorização é do domínio. Ver 02-nucleo.md §2.1.
+ * O que a aplicação enxerga. Sem token e sem grupos: `roles` monta menu de contingência
+ * ou ações de tela; o token nunca é visível para quem consome Sessao.
  */
 export type Sessao = { sub: string; roles: string[] }
 
-export interface StoreDeSessao {
+export interface LeitorDeSessao {
   ler(id: string): Promise<SessaoArmazenada | null>
+}
+
+export interface StoreDeSessao extends LeitorDeSessao {
   gravar(id: string, s: SessaoArmazenada): Promise<void>
   remover(id: string): Promise<void>
 }

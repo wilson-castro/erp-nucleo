@@ -15,7 +15,7 @@
     "test": "pnpm build && pnpm fronteira && node --conditions react-server --test test/*.test.mjs",
     "publicar": "pnpm build && pnpm publish --no-git-checks --registry http://localhost:4873"
   },
-  "dependencies": { "@erp/contratos": "0.1.0" },
+  "dependencies": { "@erp/contratos": "0.2.1" },
   "peerDependencies": { "next": "^16.0.0", "server-only": "^0.0.1" },
   "devDependencies": { "typescript": "^5.6.0", "@types/node": "^24.0.0" },
   "publishConfig": { "registry": "http://localhost:4873" }

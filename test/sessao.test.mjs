@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { sessaoArquivo } from '../dist/adaptadores/sessao-arquivo.js'
 import { identidadeDev } from '../dist/adaptadores/identidade-dev.js'
 import { criarNucleo } from '../dist/fabricas/criarNucleo.js'
-import { dadosFake } from '../dist/testing/index.js'
+import { destinosFake } from '../dist/testing/index.js'
 import { SessaoInvalida } from '../dist/interno/erros.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'sessao-'))
@@ -42,7 +42,6 @@ test('a sessao entregue a aplicacao nao contem token nem grupos', async () => {
   await store.gravar('sid-2', { sub: 'marina', roles: ['OPERADOR'],
                                 accessToken: 'token-secreto', expiraEm: Date.now() + 60_000 })
   const nucleo = criarNucleo({
-    dados: dadosFake({}),
     sessao: store,
     identidade: identidadeDev(),
     lerCookieDeSessao: async () => 'sid-2',
@@ -55,7 +54,7 @@ test('a sessao entregue a aplicacao nao contem token nem grupos', async () => {
 test('entrar() devolve so o id opaco — o token nao chega a quem chama', async () => {
   const store = sessaoArquivo({ dir })
   const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: store, identidade: identidadeDev(),
+    sessao: store, identidade: identidadeDev(),
     lerCookieDeSessao: async () => undefined,
   })
   const id = await nucleo.sessao.entrar({ usuario: 'marina' })
@@ -72,10 +71,10 @@ test('entrar() devolve so o id opaco — o token nao chega a quem chama', async 
 
 test('o Nucleo nao expoe nenhuma rota para o token', async () => {
   const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: sessaoArquivo({ dir }),
+    sessao: sessaoArquivo({ dir }),
     identidade: identidadeDev(), lerCookieDeSessao: async () => undefined,
   })
-  assert.deepEqual(Object.keys(nucleo).sort(), ['dados', 'sessao'])
+  assert.deepEqual(Object.keys(nucleo).sort(), ['destino', 'sessao'])
   assert.equal(nucleo.identidade, undefined, 'identidade daria autenticar() -> token cru')
   assert.equal(nucleo.store, undefined, 'store daria ler() -> token cru')
 })
@@ -85,7 +84,7 @@ test('exigir() e encerrar() funcionam destruturados', async () => {
   await store.gravar('sid-9', { sub: 'rafael', roles: ['ADMIN'],
                                 accessToken: 'tk', expiraEm: Date.now() + 60_000 })
   const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: store, identidade: identidadeDev(),
+    sessao: store, identidade: identidadeDev(),
     lerCookieDeSessao: async () => 'sid-9',
   })
   // destruturar quebraria um metodo que dependesse de `this`
@@ -101,7 +100,7 @@ test('sessao expirada e tratada como ausente', async () => {
   await store.gravar('sid-3', { sub: 'carla', roles: [], accessToken: 'tk',
                                 expiraEm: Date.now() - 1 })
   const nucleo = criarNucleo({
-    dados: dadosFake({}), sessao: store, identidade: identidadeDev(),
+    sessao: store, identidade: identidadeDev(),
     lerCookieDeSessao: async () => 'sid-3',
   })
   assert.equal(await nucleo.sessao.atual(), null)
