@@ -73,6 +73,12 @@ test('menu: uma entrada por modulo (prefixo /id, rotulo nome); entrada administr
     [{ id: 'zona1', rotulo: 'Zona 1', prefixo: '/zona1' }, entradaAdministrativa])
 })
 
+test('menu: a entrada inicial vem primeiro para toda sessao, mesmo sem modulo algum', async () => {
+  const entradaInicial = { id: 'inicio', rotulo: 'Início', prefixo: '/' }
+  assert.deepEqual(await criarPaginas(nucleo({ modulos: [] }), cfg({}, { entradaInicial })).modulosPermitidos(), [entradaInicial])
+  assert.deepEqual((await criarPaginas(nucleo(), cfg({}, { entradaInicial })).modulosPermitidos()).map((m) => m.prefixo), ['/', '/zona1'])
+})
+
 test('a pagina nunca recebe papeis nem CPF: o acesso efetivo so tem modulos e administra', async () => {
   const p = criarPaginas(nucleo({ administra: true }), cfg())
   assert.deepEqual(Object.keys(await p.acessoEfetivo()).sort(), ['administra', 'modulos'])

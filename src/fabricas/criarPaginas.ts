@@ -26,6 +26,8 @@ export type ConfigDePaginas = {
    * Configuração do kit, não dado do domínio: o que sai do servidor é só `administra`.
    */
   entradaAdministrativa?: ItemDeMenu
+  /** Primeira entrada do menu de toda sessão válida (o início do shell). Não é módulo. */
+  entradaInicial?: ItemDeMenu
 }
 
 /** Item do menu da moldura. Uma entrada por módulo: `prefixo = /<id>`, `rotulo = nome`. */
@@ -73,8 +75,11 @@ export function criarPaginas(nucleo: NucleoDasPaginas, cfg: ConfigDePaginas) {
   /** Menu da moldura. Gestão de acesso fora: lança, e a moldura mostra "Serviço indisponível". */
   async function modulosPermitidos(): Promise<readonly ItemDeMenu[]> {
     const { modulos, administra } = await acessoEfetivo()
-    const menu = modulos.map((m) => ({ id: m.id, rotulo: m.nome, prefixo: `/${m.id}` }))
-    return administra && cfg.entradaAdministrativa ? [...menu, cfg.entradaAdministrativa] : menu
+    return [
+      ...(cfg.entradaInicial ? [cfg.entradaInicial] : []),
+      ...modulos.map((m) => ({ id: m.id, rotulo: m.nome, prefixo: `/${m.id}` })),
+      ...(administra && cfg.entradaAdministrativa ? [cfg.entradaAdministrativa] : []),
+    ]
   }
 
   /**
