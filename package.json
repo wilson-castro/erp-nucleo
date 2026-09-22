@@ -1,6 +1,6 @@
 {
   "name": "@erp/nucleo",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "exports": {
     ".": {
@@ -22,6 +22,10 @@
     "./shell": {
       "types": "./dist/shell/index.d.ts",
       "default": "./dist/shell/index.js"
+    },
+    "./app": {
+      "types": "./dist/app/index.d.ts",
+      "default": "./dist/app/index.js"
     }
   },
   "files": [

@@ -6,7 +6,7 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 
 test('o pacote publica exatamente cinco subpaths', () => {
   assert.deepEqual(Object.keys(pkg.exports).sort(),
-                   ['.', './permissoes', './proxy', './shell', './testing'])
+                   ['.', './app', './permissoes', './proxy', './shell', './testing'])
 })
 
 test('invariante 15: a raiz nao entrega nada que escreva sessao ou autentique', async () => {

@@ -15,6 +15,7 @@ const PERMITIDO = {
   permissoes:  ['permissoes'],
   testing:     ['testing', 'portas', 'interno'],
   shell:       ['fabricas', 'adaptadores', 'portas'],
+  app:         ['fabricas', 'portas'],
 }
 
 function arquivos(dir) {
@@ -40,7 +41,7 @@ for (const arquivo of arquivos(SRC)) {
     }
   }
 
-  const precisaServerOnly = origem === 'interno' || origem === 'adaptadores' || origem === 'fabricas'
+  const precisaServerOnly = origem === 'interno' || origem === 'adaptadores' || origem === 'fabricas' || origem === 'app'
   const ehTipoPuro = origem === 'portas'
   if (precisaServerOnly && !ehTipoPuro && !texto.includes("import 'server-only'")) {
     // criarProxy roda no runtime de proxy do Next, que nao aceita server-only
