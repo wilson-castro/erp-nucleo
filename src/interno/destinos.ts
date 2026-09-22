@@ -15,7 +15,7 @@ const EXIGEM_VERSAO: readonly Metodo[] = ['PUT', 'PATCH', 'DELETE']
 const SEGMENTO_LITERAL = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/
 const PARAMETRO = /^:[A-Za-z][A-Za-z0-9]*$/
 const CONTROLE = /[\u0000-\u001f\u007f]/
-const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS')
+const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000)
 
 type DestinoValidado = Destino & { url: URL }
 

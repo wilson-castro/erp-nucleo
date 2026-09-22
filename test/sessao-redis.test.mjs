@@ -146,3 +146,13 @@ test('shell grava pelo Redis e a zona le a mesma sessao, sem token na leitura pu
   await shell.sessao.encerrar(cookie)
   assert.equal(await zona.sessao.atual(), null)
 })
+
+test('valor no Redis sem sujeito ou sem token e dado corrompido: lido como ausente', async () => {
+  const r = redisFalso()
+  const escritor = sessaoRedisDeEscrita({ cliente: r })
+  const leitor = sessaoRedis({ cliente: r })
+  for (const [id, s] of [['sem-token', { ...viva('ana'), accessToken: '' }], ['sem-sub', { ...viva('ana'), sub: '' }]]) {
+    await escritor.gravar(id, s)
+    assert.equal(await leitor.ler(id), null, id)
+  }
+})

@@ -26,7 +26,7 @@ export function identidadeDev(): ProvedorDeIdentidade {
   if (process.env.NODE_ENV === 'production' && process.env.ERP_PERMITIR_IDENTIDADE_DEV !== '1') {
     throw new Error('identidadeDev nao roda em producao; use o provedor OIDC')
   }
-  const vidaTokenS = lerNumeroPositivo(process.env.ERP_TOKEN_VIDA_S, 300, 'ERP_TOKEN_VIDA_S')
+  const vidaTokenS = lerNumeroPositivo(process.env.ERP_TOKEN_VIDA_S, 300, 'ERP_TOKEN_VIDA_S', 3_600)
 
   return {
     async autenticar(credencial) {

@@ -38,8 +38,9 @@ async function semVazar<T>(f: () => Promise<T>): Promise<T> {
 function ehSessao(v: unknown): v is SessaoArmazenada {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
   const s = v as Record<string, unknown>
-  return typeof s.sub === 'string' && typeof s.nome === 'string'
-    && typeof s.accessToken === 'string' && typeof s.expiraEm === 'number'
+  // sessão sem sujeito ou sem token é dado corrompido, não sessão (auditor_b1_d1_2, L7)
+  return typeof s.sub === 'string' && s.sub.length > 0 && typeof s.nome === 'string'
+    && typeof s.accessToken === 'string' && s.accessToken.length > 0 && typeof s.expiraEm === 'number'
 }
 
 /**

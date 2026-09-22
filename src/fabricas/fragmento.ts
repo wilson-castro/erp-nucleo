@@ -9,7 +9,7 @@ import { lerNumeroPositivo } from '../interno/configuracao.js'
 
 const VERSAO = '1'
 const CABECALHO_VERSAO = 'accept-fragmento-versao'
-const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_FRAGMENTO_TIMEOUT_MS, 2_000, 'ERP_FRAGMENTO_TIMEOUT_MS')
+const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_FRAGMENTO_TIMEOUT_MS, 2_000, 'ERP_FRAGMENTO_TIMEOUT_MS', 30_000)
 const NOME = /^[a-z0-9][a-z0-9-]*$/
 const CONTROLE = /[\u0000-\u001f\u007f]/
 /**
