@@ -1,6 +1,6 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
-import type { ModuloPermitido, ModuloEfetivo, Eu } from '@erp/contratos'
+import type { ModuloPermitido, Eu } from '@erp/contratos'
 import type { LeitorDeSessao, EscritorDeSessao, Sessao } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
 import type { ClienteDeDestino, RegistroDeDestinos } from '../portas/destinos.js'
@@ -38,7 +38,7 @@ export type Nucleo = {
   /** Cliente de um destino declarado. Nome fora do registro lança `DestinoInvalido`. */
   destino(nome: string): ClienteDeDestino
   acesso: {
-    modulosPermitidos(): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]>
+    modulosPermitidos(): Promise<readonly ModuloPermitido[]>
     obterEu(): Promise<Eu | null>
     /**
      * Camada 2 de acesso a módulo e funcionalidade (ADR-0014).

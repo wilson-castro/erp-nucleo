@@ -1,10 +1,10 @@
-import type { ModuloPermitido, ModuloEfetivo, Eu } from '@erp/contratos'
+import type { ModuloPermitido, Eu } from '@erp/contratos'
 import type { FabricaDeAcesso } from '../portas/acesso.js'
 import type { StoreDeSessao, SessaoArmazenada } from '../portas/sessao.js'
 
 /** Sem rede. Devolve sempre a mesma lista, como o domínio faria para um usuário fixo. */
 export function acessoFake(
-  modulos: readonly (ModuloPermitido | ModuloEfetivo)[],
+  modulos: readonly ModuloPermitido[],
   eu?: Eu | null,
 ): FabricaDeAcesso {
   return () => ({

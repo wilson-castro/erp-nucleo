@@ -1,5 +1,5 @@
 import 'server-only'
-import type { ModuloPermitido, ModuloEfetivo } from '@erp/contratos'
+import type { ModuloPermitido } from '@erp/contratos'
 import type { Sessao } from '../portas/sessao.js'
 import { SessaoInvalida } from '../interno/erros.js'
 
@@ -26,7 +26,7 @@ export type ConfigDePaginas = {
 export type NucleoDasPaginas = {
   sessao: { atual(): Promise<Sessao | null>; exigir(): Promise<Sessao> }
   acesso: {
-    modulosPermitidos(): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]>
+    modulosPermitidos(): Promise<readonly ModuloPermitido[]>
     exigirModulo(id: string, funcionalidade?: string): Promise<void>
   }
 }
@@ -52,7 +52,7 @@ export function criarPaginas(nucleo: NucleoDasPaginas, cfg: ConfigDePaginas) {
     (await nucleo.sessao.atual()) ?? irParaLogin())
 
   /** Uma consulta à gestão de acesso por requisição (ADR-0009, decisão 7). */
-  const modulosPermitidos = next.porRequisicao(async (): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]> => {
+  const modulosPermitidos = next.porRequisicao(async (): Promise<readonly ModuloPermitido[]> => {
     try {
       return await nucleo.acesso.modulosPermitidos()
     } catch (e) {

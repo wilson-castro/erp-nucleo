@@ -1,5 +1,5 @@
 import 'server-only'
-import type { ModuloPermitido, ModuloEfetivo, Eu } from '@erp/contratos'
+import type { ModuloPermitido, Eu } from '@erp/contratos'
 import type { FabricaDeAcesso } from '../portas/acesso.js'
 
 /**
@@ -20,11 +20,18 @@ export function acessoHttp(cfg: { destino: string }): FabricaDeAcesso {
       }
     }
 
-    async function modulosPermitidos(): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]> {
+    async function modulosPermitidos(): Promise<readonly ModuloPermitido[]> {
       try {
         const r = await cliente.get<Eu>('/v2/eu')
         if (r.body?.modulos && Array.isArray(r.body.modulos)) {
-          return r.body.modulos
+          return r.body.modulos.map((m) => ({
+            id: m.id,
+            zona: m.zona ?? m.id.split('.')[0] ?? '',
+            rotulo: m.rotulo ?? m.id,
+            prefixo: m.prefixo ?? `/${m.id.replace('.', '/')}`,
+            perfis: m.perfis ?? [],
+            funcionalidades: m.funcionalidades ?? [],
+          }))
         }
       } catch {
         // Rota /v2/eu nao declarada no destino ou erro: fallback para /v1/modulos-permitidos
