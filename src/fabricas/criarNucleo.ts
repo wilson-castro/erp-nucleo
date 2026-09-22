@@ -1,6 +1,6 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
-import type { ModuloPermitido } from '@erp/contratos'
+import type { ModuloPermitido, ModuloEfetivo, Eu } from '@erp/contratos'
 import type { LeitorDeSessao, EscritorDeSessao, Sessao } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
 import type { ClienteDeDestino, RegistroDeDestinos } from '../portas/destinos.js'
@@ -38,12 +38,14 @@ export type Nucleo = {
   /** Cliente de um destino declarado. Nome fora do registro lança `DestinoInvalido`. */
   destino(nome: string): ClienteDeDestino
   acesso: {
-    modulosPermitidos(): Promise<readonly ModuloPermitido[]>
+    modulosPermitidos(): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]>
+    obterEu(): Promise<Eu | null>
     /**
-     * Camada 2 de acesso a módulo. Módulo não permitido lança `NaoEncontrado`, que a
-     * aplicação traduz para `notFound()`: módulo restrito não revela que existe (D6).
+     * Camada 2 de acesso a módulo e funcionalidade (ADR-0014).
+     * Módulo ou funcionalidade não permitida lança `NaoEncontrado`, que a
+     * aplicação traduz para `notFound()`: recurso restrito não revela que existe (D6).
      */
-    exigirModulo(id: string): Promise<void>
+    exigirModulo(id: string, funcionalidade?: string): Promise<void>
   }
 }
 
@@ -103,15 +105,27 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
     await exigir()
     return acesso.modulosPermitidos()
   }
+  const obterEu = async () => {
+    await exigir()
+    return acesso.obterEu ? acesso.obterEu() : null
+  }
 
   return {
     sessao: { atual, exigir },
     destino,
     acesso: {
       modulosPermitidos,
-      async exigirModulo(id) {
+      obterEu,
+      async exigirModulo(id, funcionalidade) {
         const permitidos = await modulosPermitidos()
-        if (!permitidos.some((m) => m.id === id)) throw new NaoEncontrado()
+        const mod = permitidos.find((m) => m.id === id)
+        if (!mod) throw new NaoEncontrado()
+        if (funcionalidade !== undefined) {
+          const modEfetivo = mod as { funcionalidades?: readonly string[] }
+          if (!Array.isArray(modEfetivo.funcionalidades) || !modEfetivo.funcionalidades.includes(funcionalidade)) {
+            throw new NaoEncontrado()
+          }
+        }
       },
     },
   }

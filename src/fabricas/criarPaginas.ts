@@ -1,5 +1,5 @@
 import 'server-only'
-import type { ModuloPermitido } from '@erp/contratos'
+import type { ModuloPermitido, ModuloEfetivo } from '@erp/contratos'
 import type { Sessao } from '../portas/sessao.js'
 import { SessaoInvalida } from '../interno/erros.js'
 
@@ -25,7 +25,10 @@ export type ConfigDePaginas = {
 /** O mínimo do núcleo que as páginas usam; `criarNucleo` e `criarNucleoDoShell` servem. */
 export type NucleoDasPaginas = {
   sessao: { atual(): Promise<Sessao | null>; exigir(): Promise<Sessao> }
-  acesso: { modulosPermitidos(): Promise<readonly ModuloPermitido[]>; exigirModulo(id: string): Promise<void> }
+  acesso: {
+    modulosPermitidos(): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]>
+    exigirModulo(id: string, funcionalidade?: string): Promise<void>
+  }
 }
 
 export type MotivoDeNegacao = 'origem' | 'sessao' | 'modulo'
@@ -49,7 +52,7 @@ export function criarPaginas(nucleo: NucleoDasPaginas, cfg: ConfigDePaginas) {
     (await nucleo.sessao.atual()) ?? irParaLogin())
 
   /** Uma consulta à gestão de acesso por requisição (ADR-0009, decisão 7). */
-  const modulosPermitidos = next.porRequisicao(async (): Promise<readonly ModuloPermitido[]> => {
+  const modulosPermitidos = next.porRequisicao(async (): Promise<readonly (ModuloPermitido | ModuloEfetivo)[]> => {
     try {
       return await nucleo.acesso.modulosPermitidos()
     } catch (e) {
@@ -59,12 +62,21 @@ export function criarPaginas(nucleo: NucleoDasPaginas, cfg: ConfigDePaginas) {
   })
 
   /**
-   * Camada 2 de acesso a módulo (invariante 16). Negado: 404, sem página de "sem acesso"
-   * (invariante 8). **Fail-closed:** se a gestão de acesso falhar, o erro sobe e a página não
+   * Camada 2 de acesso a módulo e funcionalidade (invariante 16, ADR-0014).
+   * Negado: 404, sem página de "sem acesso" (invariante 8).
+   * **Fail-closed:** se a gestão de acesso falhar, o erro sobe e a página não
    * renderiza; engolir o erro entregava o módulo no payload RSC (gate "Shell novo", V1).
    */
-  async function exigirModulo(id: string): Promise<void> {
-    if (!(await modulosPermitidos()).some((m) => m.id === id)) next.naoEncontrado()
+  async function exigirModulo(id: string, funcionalidade?: string): Promise<void> {
+    const permitidos = await modulosPermitidos()
+    const mod = permitidos.find((m) => m.id === id)
+    if (!mod) next.naoEncontrado()
+    if (funcionalidade !== undefined) {
+      const modEfetivo = mod as { funcionalidades?: readonly string[] }
+      if (!Array.isArray(modEfetivo.funcionalidades) || !modEfetivo.funcionalidades.includes(funcionalidade)) {
+        next.naoEncontrado()
+      }
+    }
   }
 
   /**
@@ -90,6 +102,7 @@ export function criarPaginas(nucleo: NucleoDasPaginas, cfg: ConfigDePaginas) {
     modulo: string,
     corpo: () => Promise<R>,
     aoNegar: (motivo: MotivoDeNegacao) => Promise<R>,
+    funcionalidade?: string,
   ): Promise<R> {
     if (!(await origemPermitida())) return aoNegar('origem')
     try {
@@ -98,7 +111,7 @@ export function criarPaginas(nucleo: NucleoDasPaginas, cfg: ConfigDePaginas) {
       return aoNegar('sessao')
     }
     try {
-      await nucleo.acesso.exigirModulo(modulo)
+      await nucleo.acesso.exigirModulo(modulo, funcionalidade)
     } catch (e) {
       if (e instanceof SessaoInvalida) return aoNegar('sessao')
       return aoNegar('modulo')

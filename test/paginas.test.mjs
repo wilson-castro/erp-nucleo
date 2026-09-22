@@ -33,10 +33,11 @@ function nucleo({ sessao = { sub: 'ana', nome: 'Ana' }, modulos = ['zona1.painel
         if (acessoFora) throw new ErroDeAplicacao('ERRO_INTERNO')
         return modulos.map((id) => ({ id, rotulo: id, prefixo: '/x' }))
       },
-      exigirModulo: async (id) => {
-        chamadas.push(`exigirModulo:${id}`)
+      exigirModulo: async (id, funcionalidade) => {
+        chamadas.push(funcionalidade ? `exigirModulo:${id}:${funcionalidade}` : `exigirModulo:${id}`)
         if (acessoFora) throw new ErroDeAplicacao('ERRO_INTERNO')
         if (!modulos.includes(id)) throw new NaoEncontrado()
+        if (funcionalidade && funcionalidade.includes('invalida')) throw new NaoEncontrado()
       },
     },
   }
@@ -102,3 +103,14 @@ test('hostsPermitidos vazio recusa toda acao (configuracao faltando nao abre a p
   const r = await criarPaginas(nucleo(), cfg(origemOk, { hostsPermitidos: [] })).acaoProtegida('zona1.painel', async () => 'feito', async (m) => m)
   assert.equal(r, 'origem')
 })
+
+test('acaoProtegida: aceita parametro de funcionalidade opcional', async () => {
+  const n = nucleo()
+  const ok = await criarPaginas(n, cfg(origemOk)).acaoProtegida('zona1.painel', async () => 'feito', async (m) => `negou:${m}`, 'ver')
+  assert.equal(ok, 'feito')
+  assert.deepEqual(n.chamadas, ['exigir', 'exigirModulo:zona1.painel:ver'])
+
+  const negou = await criarPaginas(n, cfg(origemOk)).acaoProtegida('zona1.painel', async () => 'feito', async (m) => `negou:${m}`, 'invalida')
+  assert.equal(negou, 'negou:modulo')
+})
+

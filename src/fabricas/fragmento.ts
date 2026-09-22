@@ -1,5 +1,6 @@
 import 'server-only'
 import { ErroDeAplicacao } from '../interno/erros.js'
+import { lerNumeroPositivo } from '../interno/configuracao.js'
 
 /**
  * Fragmento entre zonas (ADR-0011): uma zona embute no HTML do servidor um bloco que outra
@@ -8,7 +9,7 @@ import { ErroDeAplicacao } from '../interno/erros.js'
 
 const VERSAO = '1'
 const CABECALHO_VERSAO = 'accept-fragmento-versao'
-const TIMEOUT_PADRAO_MS = 2_000
+const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_FRAGMENTO_TIMEOUT_MS, 2_000, 'ERP_FRAGMENTO_TIMEOUT_MS')
 const NOME = /^[a-z0-9][a-z0-9-]*$/
 const CONTROLE = /[\u0000-\u001f\u007f]/
 /**

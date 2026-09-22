@@ -4,6 +4,9 @@ export type SessaoArmazenada = {
   nome: string
   accessToken: string
   expiraEm: number
+  tokenExpiraEm?: number
+  refreshToken?: string
+  idToken?: string
 }
 
 /**

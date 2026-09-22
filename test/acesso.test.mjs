@@ -47,3 +47,35 @@ test('acessoHttp pergunta ao dominio de gestao de acesso com a credencial do usu
   assert.deepEqual(vistas, [{ url: '/v1/modulos-permitidos', auth: 'Bearer tk-ana' }])
   s.close()
 })
+
+test('acessoHttp consome /v2/eu e mapeia modulos efetivos e obterEu', async () => {
+  const euMock = {
+    pessoa: { id: 'p-1', cpf: '12345678901', nome: 'Ana', email: 'ana@empresa.com', vinculo: 'ativo' },
+    papeis: ['operador'],
+    modulos: [{ id: 'zona1.painel', perfis: ['padrao'], funcionalidades: ['zona1.painel.ver', 'zona1.painel.custo'] }],
+  }
+  const s = createServer((req, res) => {
+    if (req.url === '/v2/eu') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(euMock))
+    } else {
+      res.writeHead(404); res.end()
+    }
+  })
+  await new Promise((r) => s.listen(0, '127.0.0.1', r))
+  await sessaoArquivoDeEscrita({ dir }).gravar('sid-v2', { sub: 'ana', nome: 'Ana', accessToken: 'tk-ana', expiraEm: Date.now() + 60_000 })
+  const n = nucleo(acessoHttp({ destino: 'gestao-acesso' }), 'sid-v2', {
+    'gestao-acesso': { origem: `http://127.0.0.1:${s.address().port}`, caminhos: ['/v2/eu', '/v1/modulos-permitidos'], metodos: ['GET'], credencial: 'usuario' },
+  })
+  const mods = await n.acesso.modulosPermitidos()
+  assert.equal(mods.length, 1)
+  assert.equal(mods[0].id, 'zona1.painel')
+  assert.deepEqual(mods[0].funcionalidades, ['zona1.painel.ver', 'zona1.painel.custo'])
+  const eu = await n.acesso.obterEu()
+  assert.equal(eu.pessoa.nome, 'Ana')
+
+  await n.acesso.exigirModulo('zona1.painel', 'zona1.painel.ver')
+  await assert.rejects(() => n.acesso.exigirModulo('zona1.painel', 'zona1.painel.editar'), NaoEncontrado)
+  s.close()
+})
+
