@@ -2,6 +2,12 @@
 
 O **núcleo** compartilhado por shell e zonas: sessão, chamadas a domínio, acesso a módulo, proxy e fragmentos. Não conhece nenhum domínio de negócio.
 
+## Responsabilidades
+
+O que esta parte faz, o que nunca faz e o vocabulário usado aqui (BFF, zona, Server Action…), explicados
+do zero: [`docs/RESPONSABILIDADES.md`](https://github.com/ArtroxGabriel/nextjs-mfe/blob/bff-multizone/docs/RESPONSABILIDADES.md)
+no repositório principal, seção 7.
+
 ## O que tem
 
 | Import | Para quem | O que |
