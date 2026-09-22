@@ -8,14 +8,21 @@ import { ErroDeAplicacao } from '../interno/erros.js'
  * `createClient()` serve direto. Com `ioredis`, passe um invólucro de três linhas
  * (`set: (k, v, { PX }) => r.set(k, v, 'PX', PX)`). O núcleo não depende de nenhum dos dois.
  */
-export interface ClienteRedis {
+export interface ClienteRedisDeLeitura {
   get(chave: string): Promise<string | null>
+}
+
+/**
+ * Só o shell tem um cliente com escrita. A zona recebe `ClienteRedisDeLeitura`: sem `set` nem `del`
+ * no tipo, e sem permissão no servidor (usuário ACL só com `GET`; auditor_b1_d1_2, V1).
+ */
+export interface ClienteRedis extends ClienteRedisDeLeitura {
   set(chave: string, valor: string, opcoes: { PX: number }): Promise<unknown>
   del(chave: string): Promise<unknown>
 }
 
-export type ConfigSessaoRedis = {
-  cliente: ClienteRedis
+export type ConfigSessaoRedis<C extends ClienteRedisDeLeitura = ClienteRedis> = {
+  cliente: C
   /** Padrão `erp:sessao:`. Use outro para dividir uma instância entre ambientes. */
   prefixo?: string
 }
@@ -47,7 +54,7 @@ function ehSessao(v: unknown): v is SessaoArmazenada {
  * Leitor: o que toda aplicação recebe. Não tem `gravar` nem `remover`. Configuração do
  * servidor: uma instância só de sessão, `noeviction`, AOF (ADR-0002, 02-nucleo §2.6).
  */
-export function sessaoRedis(cfg: ConfigSessaoRedis): LeitorDeSessao {
+export function sessaoRedis(cfg: ConfigSessaoRedis<ClienteRedisDeLeitura>): LeitorDeSessao {
   const chave = chaveDe(cfg.prefixo ?? PREFIXO_PADRAO)
   return {
     async ler(id) {

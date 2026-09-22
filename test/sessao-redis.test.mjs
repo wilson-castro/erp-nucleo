@@ -156,3 +156,10 @@ test('valor no Redis sem sujeito ou sem token e dado corrompido: lido como ausen
     assert.equal(await leitor.ler(id), null, id)
   }
 })
+
+test('o leitor funciona com um cliente que so tem get (o das zonas: auditor_b1_d1_2, V1)', async () => {
+  const r = redisFalso()
+  await sessaoRedisDeEscrita({ cliente: r }).gravar('sid-leitura', viva('ana'))
+  const soLeitura = { get: (k) => r.get(k) }
+  assert.equal((await sessaoRedis({ cliente: soLeitura }).ler('sid-leitura')).sub, 'ana')
+})

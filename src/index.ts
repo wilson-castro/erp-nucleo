@@ -12,7 +12,7 @@ export {
 } from './fabricas/fragmento.js'
 
 export { sessaoArquivo } from './adaptadores/sessao-arquivo.js'
-export { sessaoRedis, type ClienteRedis, type ConfigSessaoRedis } from './adaptadores/sessao-redis.js'
+export { sessaoRedis, type ClienteRedis, type ClienteRedisDeLeitura, type ConfigSessaoRedis } from './adaptadores/sessao-redis.js'
 export { acessoHttp } from './adaptadores/acesso-http.js'
 
 export type { LeitorDeSessao, SessaoArmazenada, Sessao } from './portas/sessao.js'
