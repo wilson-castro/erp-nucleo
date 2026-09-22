@@ -14,10 +14,10 @@ const viva = (sub, extra = {}) => ({ sub, nome: sub, accessToken: `tk-${sub}`, e
 
 const zona = (cookie) => criarNucleo({
   app: 'zona', sessao: sessaoArquivo({ dir }), destinos: {},
-  acesso: acessoFake([]), lerCookieDeSessao: async () => cookie,
+  acesso: acessoFake({ modulos: [], administra: false }), lerCookieDeSessao: async () => cookie,
 })
 const shell = (cookie) => criarNucleoDoShell({
-  app: 'shell', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake([]),
+  app: 'shell', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
   lerCookieDeSessao: async () => cookie,
   escrita: { store: sessaoArquivoDeEscrita({ dir }), identidade: identidadeDev() },
 })
@@ -35,7 +35,7 @@ test('o store em modo leitura nao tem como gravar nem remover (N3)', () => {
 test('o nucleo de zona nao tem entrar nem encerrar; o do shell tem', () => {
   assert.deepEqual(Object.keys(zona().sessao).sort(), ['atual', 'exigir'])
   // nem com cast: criarNucleo ignora `escrita`
-  const forjado = criarNucleo({ app: 'z', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake([]),
+  const forjado = criarNucleo({ app: 'z', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
     lerCookieDeSessao: async () => undefined, escrita: { store: sessaoArquivoDeEscrita({ dir }), identidade: identidadeDev() } })
   assert.deepEqual(Object.keys(forjado.sessao).sort(), ['atual', 'exigir'])
   assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'encerrar', 'entrar', 'exigir'])

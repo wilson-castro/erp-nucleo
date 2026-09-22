@@ -1,16 +1,10 @@
-import type { ModuloPermitido, Eu } from '@erp/contratos'
+import type { AcessoEfetivo } from '@erp/contratos'
 import type { FabricaDeAcesso } from '../portas/acesso.js'
 import type { StoreDeSessao, SessaoArmazenada } from '../portas/sessao.js'
 
-/** Sem rede. Devolve sempre a mesma lista, como o domínio faria para um usuário fixo. */
-export function acessoFake(
-  modulos: readonly ModuloPermitido[],
-  eu?: Eu | null,
-): FabricaDeAcesso {
-  return () => ({
-    modulosPermitidos: async () => modulos,
-    obterEu: async () => eu ?? null,
-  })
+/** Sem rede. Devolve sempre o mesmo acesso efetivo, como o domínio faria para um usuário fixo. */
+export function acessoFake(acesso: AcessoEfetivo): FabricaDeAcesso {
+  return () => ({ acessoEfetivo: async () => acesso })
 }
 
 /**

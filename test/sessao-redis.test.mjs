@@ -133,13 +133,13 @@ test('shell grava pelo Redis e a zona le a mesma sessao, sem token na leitura pu
   const r = redisFalso()
   let cookie
   const shell = criarNucleoDoShell({
-    app: 'shell', sessao: sessaoRedis({ cliente: r }), destinos: {}, acesso: acessoFake([]),
+    app: 'shell', sessao: sessaoRedis({ cliente: r }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
     lerCookieDeSessao: async () => cookie,
     escrita: { store: sessaoRedisDeEscrita({ cliente: r }), identidade: identidadeDev() },
   })
   cookie = await shell.sessao.entrar({ usuario: 'bruno' })
   const zona = criarNucleo({
-    app: 'zona', sessao: sessaoRedis({ cliente: r }), destinos: {}, acesso: acessoFake([]),
+    app: 'zona', sessao: sessaoRedis({ cliente: r }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
     lerCookieDeSessao: async () => cookie,
   })
   assert.deepEqual(await zona.sessao.atual(), { sub: 'bruno', nome: 'Bruno Analista' })

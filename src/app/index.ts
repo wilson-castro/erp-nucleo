@@ -4,4 +4,5 @@ import 'server-only'
 export {
   criarPaginas,
   type AdaptadorNext, type ConfigDePaginas, type NucleoDasPaginas, type MotivoDeNegacao,
+  type ItemDeMenu, type Requisito,
 } from '../fabricas/criarPaginas.js'

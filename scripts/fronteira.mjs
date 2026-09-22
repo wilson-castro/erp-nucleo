@@ -25,40 +25,53 @@ function arquivos(dir) {
   })
 }
 
-const camadaDe = (caminho) => relative(SRC, caminho).split('/')[0]
-const erros = []
+const camadaDe = (caminho, src = SRC) => relative(src, caminho).split('/')[0]
 
-for (const arquivo of arquivos(SRC)) {
-  const origem = camadaDe(arquivo)
-  if (!(origem in PERMITIDO)) continue
-  const texto = readFileSync(arquivo, 'utf8')
+/** Tira comentários: um comentário que contém o texto do import não é o import (auditor_b1_d1_2, N08). */
+export const semComentarios = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"])\/\/.*$/gm, '$1')
 
-  for (const m of texto.matchAll(/from\s+'(\.[^']+)'/g)) {
-    const alvo = camadaDe(join(arquivo, '..', m[1]))
-    if (!(alvo in PERMITIDO)) continue
-    if (!PERMITIDO[origem].includes(alvo)) {
-      erros.push(`${relative(SRC, arquivo)}: ${origem}/ nao pode importar ${alvo}/`)
+/** O módulo importa `server-only` como instrução, numa linha própria, fora de comentário. */
+export const temServerOnly = (texto) => /^\s*import\s+['"]server-only['"]\s*;?\s*$/m.test(semComentarios(texto))
+
+export function verificarFronteira(src = SRC) {
+  const erros = []
+  for (const arquivo of arquivos(src)) {
+    const origem = camadaDe(arquivo, src)
+    if (!(origem in PERMITIDO)) continue
+    const texto = semComentarios(readFileSync(arquivo, 'utf8'))
+
+    for (const m of texto.matchAll(/from\s+'(\.[^']+)'/g)) {
+      const alvo = camadaDe(join(arquivo, '..', m[1]), src)
+      if (!(alvo in PERMITIDO)) continue
+      if (!PERMITIDO[origem].includes(alvo)) {
+        erros.push(`${relative(src, arquivo)}: ${origem}/ nao pode importar ${alvo}/`)
+      }
+    }
+
+    const precisaServerOnly = origem === 'interno' || origem === 'adaptadores' || origem === 'fabricas' || origem === 'app'
+    const ehTipoPuro = origem === 'portas'
+    if (precisaServerOnly && !ehTipoPuro && !temServerOnly(texto)) {
+      // criarProxy roda no runtime de proxy do Next, que nao aceita server-only
+      if (!arquivo.endsWith('criarProxy.ts')) {
+        erros.push(`${relative(src, arquivo)}: falta import 'server-only'`)
+      }
+    }
+    if (origem === 'borda' && temServerOnly(texto)) {
+      erros.push(`${relative(src, arquivo)}: borda/ NAO pode ter server-only — roda no runtime de proxy`)
+    }
+    if (origem === 'permissoes' && temServerOnly(texto)) {
+      erros.push(`${relative(src, arquivo)}: permissoes/ NAO pode ter server-only — as ilhas precisam dele`)
     }
   }
 
-  const precisaServerOnly = origem === 'interno' || origem === 'adaptadores' || origem === 'fabricas' || origem === 'app'
-  const ehTipoPuro = origem === 'portas'
-  if (precisaServerOnly && !ehTipoPuro && !texto.includes("import 'server-only'")) {
-    // criarProxy roda no runtime de proxy do Next, que nao aceita server-only
-    if (!arquivo.endsWith('criarProxy.ts')) {
-      erros.push(`${relative(SRC, arquivo)}: falta import 'server-only'`)
-    }
-  }
-  if (origem === 'borda' && texto.includes("import 'server-only'")) {
-    erros.push(`${relative(SRC, arquivo)}: borda/ NAO pode ter server-only — roda no runtime de proxy`)
-  }
-  if (origem === 'permissoes' && texto.includes("import 'server-only'")) {
-    erros.push(`${relative(SRC, arquivo)}: permissoes/ NAO pode ter server-only — as ilhas precisam dele`)
-  }
+  return erros
 }
 
-if (erros.length) {
-  console.error('fronteira entre camadas violada:\n' + erros.map((e) => '  ' + e).join('\n'))
-  process.exit(1)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const erros = verificarFronteira()
+  if (erros.length) {
+    console.error('fronteira entre camadas violada:\n' + erros.map((e) => '  ' + e).join('\n'))
+    process.exit(1)
+  }
+  console.log('fronteira entre camadas: ok')
 }
-console.log('fronteira entre camadas: ok')
