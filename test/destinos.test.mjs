@@ -164,3 +164,20 @@ for (const [caso, d] of [
     assert.throws(() => validarRegistro({ d: { ...base, ...d } }), /registro de destinos/)
   })
 }
+
+test('N36b (auditor_b1_d1_3): destino sem timeoutMs usa ERP_DESTINO_TIMEOUT_MS do ambiente, nao um valor fixo', async () => {
+  // o padrao e lido na carga do modulo: roda num processo filho com o ambiente definido
+  const b = await servidor(() => { /* nunca responde */ })
+  const { execFile } = await import('node:child_process')
+  const script = `
+    const { criarTransporte } = await import(${JSON.stringify(new URL('../dist/interno/destinos.js', import.meta.url).href)})
+    const destino = criarTransporte({ app: 'z', obterToken: async () => 't', fetch,
+      registro: { d: { origem: ${JSON.stringify(b.origem)}, caminhos: ['/v1/x'], metodos: ['GET'], credencial: 'usuario' } } })
+    const t0 = Date.now()
+    try { await destino('d').get('/v1/x') } catch {}
+    console.log(Date.now() - t0)`
+  const ms = await new Promise((ok, falha) => execFile(process.execPath, ['--conditions', 'react-server', '--input-type=module', '-e', script],
+    { env: { ...process.env, ERP_DESTINO_TIMEOUT_MS: '200' }, timeout: 4000 }, (e, out) => (e ? falha(e) : ok(Number(out.trim())))))
+  assert.ok(ms >= 150 && ms < 1500, `destino sem timeoutMs levou ${ms} ms com ERP_DESTINO_TIMEOUT_MS=200`)
+  b.fechar()
+})

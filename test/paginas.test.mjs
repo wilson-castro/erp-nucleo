@@ -107,7 +107,9 @@ test('acaoProtegida: origem, sessao e requisito conferidos NESSA ordem, antes do
 })
 
 test('acaoProtegida: origem ruim nega sem consultar sessao nem acesso, e sem rodar o corpo', async () => {
-  for (const cab of [{}, { origin: 'http://evil.com' }, { origin: 'http://localhost:3000', 'sec-fetch-site': 'cross-site' }, { origin: 'nao-e-url' }]) {
+  // same-site: subdomínio irmão não é a origem do shell (auditor_b1_d1_3, N53)
+  for (const cab of [{}, { origin: 'http://evil.com' }, { origin: 'http://localhost:3000', 'sec-fetch-site': 'cross-site' },
+                     { origin: 'http://localhost:3000', 'sec-fetch-site': 'same-site' }, { origin: 'nao-e-url' }]) {
     const n = nucleo(); let rodou = false
     const r = await criarPaginas(n, cfg(cab)).acaoProtegida(PAINEL, async () => { rodou = true }, async (m) => m)
     assert.equal(r, 'origem', JSON.stringify(cab)); assert.equal(rodou, false); assert.deepEqual(n.chamadas, [])

@@ -108,7 +108,8 @@ for (const [nome, responder] of [
 test('reduzirEu: papeis vazios nao administram; papeis e modulos mal formados sao erro', () => {
   assert.deepEqual(reduzirEu(EU), { modulos: [ZONA1], administra: false })
   for (const ruim of [null, [], { ...EU, papeis: undefined }, { ...EU, papeis: [{ escopo: '*' }] },
-                      { ...EU, modulos: [ZONA1, ZONA1] }, { ...EU, modulos: [{ id: 'zona1', funcionalidades: [] }] }]) {
+                      { ...EU, modulos: [ZONA1, ZONA1] }, { ...EU, modulos: [{ id: 'zona1', funcionalidades: [] }] },
+                      { ...EU, modulos: [{ ...ZONA1, nome: '' }] }]) {   // A05 (auditor_b1_d1_3)
     assert.throws(() => reduzirEu(ruim), ErroDeAplicacao, JSON.stringify(ruim))
   }
 })
