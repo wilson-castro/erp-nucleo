@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import ts from 'typescript'
 
 const SRC = new URL('../src/', import.meta.url).pathname
 
@@ -27,21 +28,41 @@ function arquivos(dir) {
 
 const camadaDe = (caminho, src = SRC) => relative(src, caminho).split('/')[0]
 
-/** Tira comentários: um comentário que contém o texto do import não é o import (auditor_b1_d1_2, N08). */
-export const semComentarios = (texto) => texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"])\/\/.*$/gm, '$1')
+const arvore = (texto) => ts.createSourceFile('x.ts', texto, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
 
-/** O módulo importa `server-only` como instrução, numa linha própria, fora de comentário. */
-export const temServerOnly = (texto) => /^\s*import\s+['"]server-only['"]\s*;?\s*$/m.test(semComentarios(texto))
+/**
+ * O módulo importa `server-only` como declaração de topo (`import 'server-only'`), lida pela
+ * árvore do compilador: comentário, string ou template literal com o texto não contam
+ * (auditor_b1_d1_3, V3/N08b).
+ */
+export const temServerOnly = (texto) => arvore(texto).statements.some((st) =>
+  ts.isImportDeclaration(st) && !st.importClause && ts.isStringLiteral(st.moduleSpecifier) && st.moduleSpecifier.text === 'server-only')
+
+/** Especificadores relativos que o módulo importa: import, export…from, import() e require(), com qualquer aspa. */
+export function importsRelativos(texto) {
+  const lista = []
+  const literal = (n) => (n && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : null)
+  const visitar = (no) => {
+    let mod = null
+    if ((ts.isImportDeclaration(no) || ts.isExportDeclaration(no)) && no.moduleSpecifier) mod = literal(no.moduleSpecifier)
+    if (ts.isCallExpression(no) && (no.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(no.expression) && no.expression.text === 'require'))) mod = literal(no.arguments[0])
+    if (mod?.startsWith('.')) lista.push(mod)
+    ts.forEachChild(no, visitar)
+  }
+  visitar(arvore(texto))
+  return lista
+}
 
 export function verificarFronteira(src = SRC) {
   const erros = []
   for (const arquivo of arquivos(src)) {
     const origem = camadaDe(arquivo, src)
     if (!(origem in PERMITIDO)) continue
-    const texto = semComentarios(readFileSync(arquivo, 'utf8'))
+    const texto = readFileSync(arquivo, 'utf8')
 
-    for (const m of texto.matchAll(/from\s+'(\.[^']+)'/g)) {
-      const alvo = camadaDe(join(arquivo, '..', m[1]), src)
+    for (const mod of importsRelativos(texto)) {
+      const alvo = camadaDe(join(arquivo, '..', mod), src)
       if (!(alvo in PERMITIDO)) continue
       if (!PERMITIDO[origem].includes(alvo)) {
         erros.push(`${relative(src, arquivo)}: ${origem}/ nao pode importar ${alvo}/`)
