@@ -145,3 +145,33 @@ test('a fronteira le import com aspas duplas, export…from e import() (auditor_
     assert.deepEqual(verificarFronteira(src), ['portas/p.ts: portas/ nao pode importar fabricas/'], linha)
   }
 })
+
+// --- auditor_b1_d1_4: V2 (N38d, N38e, N38f) ---
+test('N38d-f: simbolos exclusivos do shell nao podem ser importados ou embrulhados na raiz ou em app/', () => {
+  // N38d: src/index.ts com export const sessaoRedisCompleta = (...a) => sessaoRedisDeEscrita(...a)
+  const src1 = mkdtempSync(juntar(tmpdir(), 'fronteira-'))
+  mkdirSync(juntar(src1, 'adaptadores'))
+  writeFileSync(juntar(src1, 'adaptadores', 'sessao-redis.ts'), "import 'server-only'\nexport function sessaoRedisDeEscrita() {}\n")
+  writeFileSync(juntar(src1, 'index.ts'), "import { sessaoRedisDeEscrita } from './adaptadores/sessao-redis.js'\nexport const sessaoRedisCompleta = (...a: any[]) => sessaoRedisDeEscrita(...a)\n")
+  const erros1 = verificarFronteira(src1)
+  assert.ok(erros1.some((e) => e.includes("simbolo exclusivo do shell 'sessaoRedisDeEscrita'")), 'deveria barrar embrulho na raiz')
+
+  // N38e: src/app/index.ts com criarNucleoCompleto = (c) => criarNucleoDoShell(c)
+  const src2 = mkdtempSync(juntar(tmpdir(), 'fronteira-'))
+  mkdirSync(juntar(src2, 'app'))
+  mkdirSync(juntar(src2, 'fabricas'))
+  writeFileSync(juntar(src2, 'fabricas', 'criarNucleo.ts'), "import 'server-only'\nexport function criarNucleoDoShell() {}\n")
+  writeFileSync(juntar(src2, 'app', 'index.ts'), "import 'server-only'\nimport { criarNucleoDoShell } from '../fabricas/criarNucleo.js'\nexport const criarNucleoCompleto = (c: any) => criarNucleoDoShell(c)\n")
+  const erros2 = verificarFronteira(src2)
+  assert.ok(erros2.some((e) => e.includes("simbolo exclusivo do shell 'criarNucleoDoShell'")), 'deveria barrar embrulho em app/')
+
+  // N38f: src/app/index.ts com kit = { criar: criarNucleoDoShell }
+  const src3 = mkdtempSync(juntar(tmpdir(), 'fronteira-'))
+  mkdirSync(juntar(src3, 'app'))
+  mkdirSync(juntar(src3, 'fabricas'))
+  writeFileSync(juntar(src3, 'fabricas', 'criarNucleo.ts'), "import 'server-only'\nexport function criarNucleoDoShell() {}\n")
+  writeFileSync(juntar(src3, 'app', 'index.ts'), "import 'server-only'\nimport { criarNucleoDoShell } from '../fabricas/criarNucleo.js'\nexport const kit = { criar: criarNucleoDoShell }\n")
+  const erros3 = verificarFronteira(src3)
+  assert.ok(erros3.some((e) => e.includes("simbolo exclusivo do shell 'criarNucleoDoShell'")), 'deveria barrar kit em app/')
+})
+

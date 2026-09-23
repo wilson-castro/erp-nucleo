@@ -8,6 +8,7 @@ const SRC = new URL('../src/', import.meta.url).pathname
 // `interno` pode ler `portas` porque portas são só tipos: não há código para criar ciclo.
 // `borda`: código puro que roda no runtime de proxy do Next (CSP, trace); sem server-only.
 const PERMITIDO = {
+  raiz:        ['fabricas', 'adaptadores', 'portas', 'permissoes', 'borda', 'interno'],
   borda:       ['borda'],
   interno:     ['interno', 'portas', 'borda'],
   portas:      ['portas'],
@@ -15,9 +16,17 @@ const PERMITIDO = {
   fabricas:    ['fabricas', 'adaptadores', 'portas', 'interno', 'borda'],
   permissoes:  ['permissoes'],
   testing:     ['testing', 'portas', 'interno'],
-  shell:       ['fabricas', 'adaptadores', 'portas'],
+  shell:       ['fabricas', 'adaptadores', 'portas', 'shell'],
   app:         ['fabricas', 'portas'],
 }
+
+const SIMBOLOS_EXCLUSIVOS_DO_SHELL = new Map([
+  ['criarNucleoDoShell', 'fabricas/criarNucleo.ts'],
+  ['sessaoArquivoDeEscrita', 'adaptadores/sessao-arquivo.ts'],
+  ['sessaoRedisDeEscrita', 'adaptadores/sessao-redis.ts'],
+  ['identidadeDev', 'adaptadores/identidade-dev.ts'],
+  ['ATORES_DE_DESENVOLVIMENTO', 'adaptadores/identidade-dev.ts'],
+])
 
 function arquivos(dir) {
   return readdirSync(dir).flatMap((n) => {
@@ -26,7 +35,12 @@ function arquivos(dir) {
   })
 }
 
-const camadaDe = (caminho, src = SRC) => relative(src, caminho).split('/')[0]
+const camadaDe = (caminho, src = SRC) => {
+  const rel = relative(src, caminho)
+  const primeira = rel.split('/')[0]
+  if (primeira.endsWith('.ts')) return 'raiz'
+  return primeira
+}
 
 const arvore = (texto) => ts.createSourceFile('x.ts', texto, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
 
@@ -82,6 +96,21 @@ export function verificarFronteira(src = SRC) {
     }
     if (origem === 'permissoes' && temServerOnly(texto)) {
       erros.push(`${relative(src, arquivo)}: permissoes/ NAO pode ter server-only — as ilhas precisam dele`)
+    }
+
+    if (origem !== 'shell') {
+      const relArquivo = relative(src, arquivo)
+      const sf = arvore(texto)
+      const checarNo = (no) => {
+        if (ts.isIdentifier(no) && SIMBOLOS_EXCLUSIVOS_DO_SHELL.has(no.text)) {
+          const definidor = SIMBOLOS_EXCLUSIVOS_DO_SHELL.get(no.text)
+          if (relArquivo !== definidor) {
+            erros.push(`${relArquivo}: simbolo exclusivo do shell '${no.text}' nao pode ser importado ou usado fora de shell/`)
+          }
+        }
+        ts.forEachChild(no, checarNo)
+      }
+      checarNo(sf)
     }
   }
 
