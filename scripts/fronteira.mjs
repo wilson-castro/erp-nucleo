@@ -20,13 +20,82 @@ const PERMITIDO = {
   app:         ['fabricas', 'portas'],
 }
 
-const SIMBOLOS_EXCLUSIVOS_DO_SHELL = new Map([
-  ['criarNucleoDoShell', 'fabricas/criarNucleo.ts'],
-  ['sessaoArquivoDeEscrita', 'adaptadores/sessao-arquivo.ts'],
-  ['sessaoRedisDeEscrita', 'adaptadores/sessao-redis.ts'],
-  ['identidadeDev', 'adaptadores/identidade-dev.ts'],
-  ['ATORES_DE_DESENVOLVIMENTO', 'adaptadores/identidade-dev.ts'],
-])
+/**
+ * Símbolos exclusivos do shell, DERIVADOS de `shell/index.ts` (auditor_b1_d1_8, V4): cada valor que ele
+ * reexporta, com o arquivo que o define. Uma lista escrita à mão deixava passar o escritor novo que o D2
+ * vai acrescentar (renovação); aqui ele entra sozinho ao ser publicado em `/shell`.
+ * Nome → arquivo definidor, relativo a `src`.
+ */
+export function simbolosDoShell(src = SRC) {
+  const indice = join(src, 'shell', 'index.ts')
+  const mapa = new Map()
+  let sf
+  try { sf = arvore(readFileSync(indice, 'utf8')) } catch { return mapa }
+  for (const st of sf.statements) {
+    if (!ts.isExportDeclaration(st) || st.isTypeOnly || !st.moduleSpecifier || !st.exportClause || !ts.isNamedExports(st.exportClause)) continue
+    const definidor = relative(src, join(indice, '..', st.moduleSpecifier.text.replace(/\.js$/, '.ts')))
+    for (const e of st.exportClause.elements) {
+      if (!e.isTypeOnly) mapa.set((e.propertyName ?? e.name).text, definidor)
+    }
+  }
+  return mapa
+}
+
+/** Nomes que, no tipo de um valor, só quem escreve sessão ou autentica tem (portas/sessao.ts, portas/identidade.ts, NucleoDoShell). */
+const CAPACIDADES_DE_ESCRITA = new Set(['gravar', 'remover', 'autenticar', 'entrar', 'encerrar'])
+
+/** O tipo dá acesso a escrita de sessão ou a autenticação: por propriedade, retorno (inclusive Promise) ou membro de união. */
+function temEscrita(checker, tipo, vistos = new Set(), profundidade = 0) {
+  if (!tipo || vistos.has(tipo) || profundidade > 6) return false
+  vistos.add(tipo)
+  if (tipo.isUnionOrIntersection() && tipo.types.some((t) => temEscrita(checker, t, vistos, profundidade + 1))) return true
+  const aguardado = checker.getAwaitedType(tipo)
+  if (aguardado && aguardado !== tipo && temEscrita(checker, aguardado, vistos, profundidade + 1)) return true
+  for (const assinatura of [...tipo.getCallSignatures(), ...tipo.getConstructSignatures()]) {
+    if (temEscrita(checker, assinatura.getReturnType(), vistos, profundidade + 1)) return true
+  }
+  for (const prop of checker.getPropertiesOfType(tipo)) {
+    if (CAPACIDADES_DE_ESCRITA.has(prop.name)) return true
+    const decl = prop.valueDeclaration ?? prop.declarations?.[0]
+    if (decl && temEscrita(checker, checker.getTypeOfSymbolAtLocation(prop, decl), vistos, profundidade + 1)) return true
+  }
+  return false
+}
+
+/**
+ * Regra por tipo (auditor_b1_d1_8, V4: N38g, N38h, N38k): fora de `shell/`, nenhum arquivo exporta valor
+ * que dê escrita de sessão ou autenticação, venha com o nome que vier. A única exceção é o definidor
+ * exportando o próprio símbolo que `/shell` publica. `testing/` fica fora: `sessaoMemoria` grava só num
+ * `Map` do próprio processo, nunca no store que o shell usa.
+ */
+function exportsComEscrita(src, simbolos) {
+  const todos = arquivos(src)
+  const programa = ts.createProgram({
+    rootNames: todos,
+    options: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
+      strict: true, noEmit: true, skipLibCheck: true, types: [] },
+  })
+  const checker = programa.getTypeChecker()
+  const erros = []
+  for (const arquivo of todos) {
+    const camada = camadaDe(arquivo, src)
+    if (camada === 'shell' || camada === 'testing') continue
+    const sf = programa.getSourceFile(arquivo)
+    const modulo = sf && checker.getSymbolAtLocation(sf)
+    if (!modulo) continue
+    const rel = relative(src, arquivo)
+    for (const exportado of checker.getExportsOfModule(modulo)) {
+      const reexport = (exportado.flags & ts.SymbolFlags.Alias) !== 0
+      const alvo = reexport ? checker.getAliasedSymbol(exportado) : exportado
+      if (!(alvo.flags & ts.SymbolFlags.Value)) continue
+      const decl = alvo.valueDeclaration ?? alvo.declarations?.[0]
+      if (!decl || !temEscrita(checker, checker.getTypeOfSymbolAtLocation(alvo, decl), new Set())) continue
+      const doDefinidor = !reexport && simbolos.get(exportado.name) === rel
+      if (!doDefinidor) erros.push(`${rel}: exporta '${exportado.name}', que escreve sessao ou autentica: so /shell publica isso`)
+    }
+  }
+  return erros
+}
 
 function arquivos(dir) {
   return readdirSync(dir).flatMap((n) => {
@@ -42,7 +111,7 @@ const camadaDe = (caminho, src = SRC) => {
   return primeira
 }
 
-const arvore = (texto) => ts.createSourceFile('x.ts', texto, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+const arvore = (texto) => ts.createSourceFile('x.ts', texto, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 
 /**
  * O módulo importa `server-only` como declaração de topo (`import 'server-only'`), lida pela
@@ -70,6 +139,7 @@ export function importsRelativos(texto) {
 
 export function verificarFronteira(src = SRC) {
   const erros = []
+  const simbolos = simbolosDoShell(src)
   for (const arquivo of arquivos(src)) {
     const origem = camadaDe(arquivo, src)
     if (!(origem in PERMITIDO)) continue
@@ -102,9 +172,11 @@ export function verificarFronteira(src = SRC) {
       const relArquivo = relative(src, arquivo)
       const sf = arvore(texto)
       const checarNo = (no) => {
-        if (ts.isIdentifier(no) && SIMBOLOS_EXCLUSIVOS_DO_SHELL.has(no.text)) {
-          const definidor = SIMBOLOS_EXCLUSIVOS_DO_SHELL.get(no.text)
-          if (relArquivo !== definidor) {
+        if (ts.isIdentifier(no) && simbolos.has(no.text)) {
+          // no definidor vale só a declaração; embrulho ou reexport ali mesmo reprova (N38g, N38h, N38i)
+          const ehDeclaracao = relArquivo === simbolos.get(no.text) && no.parent?.name === no
+            && (ts.isFunctionDeclaration(no.parent) || ts.isVariableDeclaration(no.parent) || ts.isClassDeclaration(no.parent))
+          if (!ehDeclaracao) {
             erros.push(`${relArquivo}: simbolo exclusivo do shell '${no.text}' nao pode ser importado ou usado fora de shell/`)
           }
         }
@@ -114,6 +186,7 @@ export function verificarFronteira(src = SRC) {
     }
   }
 
+  erros.push(...exportsComEscrita(src, simbolos))
   return erros
 }
 

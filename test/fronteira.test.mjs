@@ -147,11 +147,17 @@ test('a fronteira le import com aspas duplas, export…from e import() (auditor_
 })
 
 // --- auditor_b1_d1_4: V2 (N38d, N38e, N38f) ---
+// os símbolos exclusivos vêm do `shell/index.ts` (auditor_b1_d1_8, V4): o src de brinquedo publica o seu
+function publicarNoShell(src, nome, de) {
+  mkdirSync(juntar(src, 'shell'), { recursive: true })
+  writeFileSync(juntar(src, 'shell', 'index.ts'), `export { ${nome} } from '${de}'\n`)
+}
 test('N38d-f: simbolos exclusivos do shell nao podem ser importados ou embrulhados na raiz ou em app/', () => {
   // N38d: src/index.ts com export const sessaoRedisCompleta = (...a) => sessaoRedisDeEscrita(...a)
   const src1 = mkdtempSync(juntar(tmpdir(), 'fronteira-'))
   mkdirSync(juntar(src1, 'adaptadores'))
   writeFileSync(juntar(src1, 'adaptadores', 'sessao-redis.ts'), "import 'server-only'\nexport function sessaoRedisDeEscrita() {}\n")
+  publicarNoShell(src1, 'sessaoRedisDeEscrita', '../adaptadores/sessao-redis.js')
   writeFileSync(juntar(src1, 'index.ts'), "import { sessaoRedisDeEscrita } from './adaptadores/sessao-redis.js'\nexport const sessaoRedisCompleta = (...a: any[]) => sessaoRedisDeEscrita(...a)\n")
   const erros1 = verificarFronteira(src1)
   assert.ok(erros1.some((e) => e.includes("simbolo exclusivo do shell 'sessaoRedisDeEscrita'")), 'deveria barrar embrulho na raiz')
@@ -161,6 +167,7 @@ test('N38d-f: simbolos exclusivos do shell nao podem ser importados ou embrulhad
   mkdirSync(juntar(src2, 'app'))
   mkdirSync(juntar(src2, 'fabricas'))
   writeFileSync(juntar(src2, 'fabricas', 'criarNucleo.ts'), "import 'server-only'\nexport function criarNucleoDoShell() {}\n")
+  publicarNoShell(src2, 'criarNucleoDoShell', '../fabricas/criarNucleo.js')
   writeFileSync(juntar(src2, 'app', 'index.ts'), "import 'server-only'\nimport { criarNucleoDoShell } from '../fabricas/criarNucleo.js'\nexport const criarNucleoCompleto = (c: any) => criarNucleoDoShell(c)\n")
   const erros2 = verificarFronteira(src2)
   assert.ok(erros2.some((e) => e.includes("simbolo exclusivo do shell 'criarNucleoDoShell'")), 'deveria barrar embrulho em app/')
@@ -170,8 +177,85 @@ test('N38d-f: simbolos exclusivos do shell nao podem ser importados ou embrulhad
   mkdirSync(juntar(src3, 'app'))
   mkdirSync(juntar(src3, 'fabricas'))
   writeFileSync(juntar(src3, 'fabricas', 'criarNucleo.ts'), "import 'server-only'\nexport function criarNucleoDoShell() {}\n")
+  publicarNoShell(src3, 'criarNucleoDoShell', '../fabricas/criarNucleo.js')
   writeFileSync(juntar(src3, 'app', 'index.ts'), "import 'server-only'\nimport { criarNucleoDoShell } from '../fabricas/criarNucleo.js'\nexport const kit = { criar: criarNucleoDoShell }\n")
   const erros3 = verificarFronteira(src3)
   assert.ok(erros3.some((e) => e.includes("simbolo exclusivo do shell 'criarNucleoDoShell'")), 'deveria barrar kit em app/')
 })
 
+
+// --- auditor_b1_d1_8: V4 (N38g, N38h, N38i, N38k, N38l; L4/FR2) ---
+import { cpSync, readFileSync as ler, appendFileSync } from 'node:fs'
+import { simbolosDoShell } from '../scripts/fronteira.mjs'
+
+/** Cópia do `src/` real com as mudanças `{ arquivo: [de, para] | texto a acrescentar }`; devolve a raiz. */
+function srcMutado(mudancas) {
+  const src = juntar(mkdtempSync(juntar(tmpdir(), 'fronteira-')), 'src')
+  cpSync(new URL('../src/', import.meta.url).pathname, src, { recursive: true })
+  for (const [arquivo, m] of Object.entries(mudancas)) {
+    const f = juntar(src, arquivo)
+    if (typeof m === 'string') { appendFileSync(f, m); continue }
+    const antes = ler(f, 'utf8')
+    assert.equal(antes.split(m[0]).length, 2, `${arquivo}: texto da mutacao nao e unico`)
+    writeFileSync(f, antes.replace(m[0], m[1]))
+  }
+  return src
+}
+
+test('V4: os simbolos do shell saem de shell/index.ts, com o definidor de cada um (nada escrito a mao)', () => {
+  const s = simbolosDoShell()
+  assert.deepEqual([...s.keys()].sort(), ['ATORES_DE_DESENVOLVIMENTO', 'criarNucleoDoShell', 'identidadeDev', 'sessaoArquivoDeEscrita', 'sessaoRedisDeEscrita'])
+  assert.equal(s.get('sessaoRedisDeEscrita'), 'adaptadores/sessao-redis.ts')
+  assert.deepEqual(verificarFronteira(srcMutado({})), [], 'a copia sem mudanca deveria passar')
+})
+
+test('V4 (N38l): escritor novo publicado em /shell e embrulhado em /app reprova sem ninguem mexer numa lista', () => {
+  const src = srcMutado({
+    'shell/index.ts': "export { renovarSessao } from '../fabricas/renovacao.js'\n",
+    'app/index.ts': "import { renovarSessao } from '../fabricas/renovacao.js'\nexport const renovar = (id: string) => renovarSessao(id)\n",
+  })
+  writeFileSync(juntar(src, 'fabricas', 'renovacao.ts'), "import 'server-only'\nexport async function renovarSessao(id: string): Promise<string | null> { return id }\n")
+  const erros = verificarFronteira(src)
+  assert.ok(erros.some((e) => e.startsWith("app/index.ts: simbolo exclusivo do shell 'renovarSessao'")), JSON.stringify(erros))
+})
+
+test('V4 (N38k): adaptador de escrita novo exportado pela raiz reprova pelo tipo, com qualquer nome', () => {
+  const src = srcMutado({ 'index.ts': "export { sessaoCompartilhada } from './adaptadores/sessao-compartilhada.js'\n" })
+  writeFileSync(juntar(src, 'adaptadores', 'sessao-compartilhada.ts'),
+    "import 'server-only'\nimport type { StoreDeSessao } from '../portas/sessao.js'\n" +
+    'export function sessaoCompartilhada(): StoreDeSessao { return { ler: async () => null, gravar: async () => {}, remover: async () => {} } }\n')
+  const erros = verificarFronteira(src)
+  assert.ok(erros.some((e) => e.startsWith("index.ts: exporta 'sessaoCompartilhada'")), JSON.stringify(erros))
+  assert.ok(erros.some((e) => e.startsWith("adaptadores/sessao-compartilhada.ts: exporta 'sessaoCompartilhada'")), JSON.stringify(erros))
+})
+
+test('V4 (N38g, N38h): embrulho no proprio arquivo definidor, reexportado por /app ou pela raiz, reprova', () => {
+  const g = verificarFronteira(srcMutado({
+    'fabricas/criarNucleo.ts': '\nexport const criarNucleoCompleto = (c: ConfigDoNucleoDoShell) => criarNucleoDoShell(c)\n',
+    'app/index.ts': "export { criarNucleoCompleto } from '../fabricas/criarNucleo.js'\n",
+  }))
+  assert.ok(g.some((e) => e.startsWith("fabricas/criarNucleo.ts: simbolo exclusivo do shell 'criarNucleoDoShell'")), JSON.stringify(g))
+  assert.ok(g.some((e) => e.startsWith("app/index.ts: exporta 'criarNucleoCompleto'")), JSON.stringify(g))
+  const h = verificarFronteira(srcMutado({
+    'adaptadores/sessao-redis.ts': '\nexport const sessaoRedisCompleta = sessaoRedisDeEscrita\n',
+    'index.ts': "export { sessaoRedisCompleta } from './adaptadores/sessao-redis.js'\n",
+  }))
+  assert.ok(h.some((e) => e.startsWith("adaptadores/sessao-redis.ts: simbolo exclusivo do shell 'sessaoRedisDeEscrita'")), JSON.stringify(h))
+  assert.ok(h.some((e) => e.startsWith("index.ts: exporta 'sessaoRedisCompleta'")), JSON.stringify(h))
+})
+
+test('V4 (N38i): o leitor da raiz que devolve o escritor sob uma opcao reprova', () => {
+  const erros = verificarFronteira(srcMutado({
+    'adaptadores/sessao-redis.ts': ['export function sessaoRedis(cfg: ConfigSessaoRedis<ClienteRedisDeLeitura>): LeitorDeSessao {\n',
+      'export function sessaoRedis(cfg: ConfigSessaoRedis<ClienteRedisDeLeitura> & { escrita?: boolean }): LeitorDeSessao {\n' +
+      '  if (cfg.escrita) return sessaoRedisDeEscrita(cfg as ConfigSessaoRedis)\n'],
+  }))
+  assert.ok(erros.some((e) => e.startsWith("adaptadores/sessao-redis.ts: simbolo exclusivo do shell 'sessaoRedisDeEscrita'")), JSON.stringify(erros))
+})
+
+test('V4 (N38i, publicado): os leitores da raiz so tem ler, com qualquer opcao a mais', async () => {
+  const m = await import('../dist/index.js')
+  const cliente = { get: async () => null, set: async () => 'OK', del: async () => 1 }
+  assert.deepEqual(Object.keys(m.sessaoRedis({ cliente, escrita: true })), ['ler'])
+  assert.deepEqual(Object.keys(m.sessaoArquivo({ dir: mkdtempSync(juntar(tmpdir(), 's-')), escrita: true })), ['ler'])
+})
