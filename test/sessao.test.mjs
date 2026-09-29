@@ -43,7 +43,7 @@ test('o nucleo de zona nao tem entrar nem encerrar; o do shell tem', () => {
 
 test('identidadeDev autentica os atores de desenvolvimento e recusa o resto', async () => {
   const idp = identidadeDev()
-  for (const u of ['ana', 'bruno', 'carla', 'davi']) {
+  for (const u of ['ana', 'bruno', 'carla', 'davi', 'eva']) {
     const s = await idp.autenticar({ usuario: u })
     assert.equal(s.sub, u)
     assert.ok(s.accessToken.length > 0)

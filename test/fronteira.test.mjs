@@ -259,3 +259,25 @@ test('V4 (N38i, publicado): os leitores da raiz so tem ler, com qualquer opcao a
   assert.deepEqual(Object.keys(m.sessaoRedis({ cliente, escrita: true })), ['ler'])
   assert.deepEqual(Object.keys(m.sessaoArquivo({ dir: mkdtempSync(juntar(tmpdir(), 's-')), escrita: true })), ['ler'])
 })
+
+test('LC (auditor_b1_d1_9, N38q): fabrica assincrona Promise<StoreDeSessao> na raiz reprova pelo ramo de Promise', () => {
+  const src = srcMutado({ 'index.ts': "export { obterStore } from './adaptadores/obter-store.js'\n" })
+  writeFileSync(juntar(src, 'adaptadores', 'obter-store.ts'),
+    "import 'server-only'\nimport type { StoreDeSessao } from '../portas/sessao.js'\n" +
+    'export async function obterStore(): Promise<StoreDeSessao> { return { ler: async () => null, gravar: async () => {}, remover: async () => {} } }\n')
+  const erros = verificarFronteira(src)
+  assert.ok(erros.some((e) => e.startsWith("index.ts: exporta 'obterStore'")), JSON.stringify(erros))
+  assert.ok(erros.some((e) => e.startsWith("adaptadores/obter-store.ts: exporta 'obterStore'")), JSON.stringify(erros))
+})
+
+test('LC (auditor_b1_d1_9, N38r): retorno em uniao (LeitorDeSessao | StoreDeSessao) na raiz reprova pelo ramo de uniao', () => {
+  const src = srcMutado({ 'index.ts': "export { sessaoMista } from './adaptadores/sessao-mista.js'\n" })
+  writeFileSync(juntar(src, 'adaptadores', 'sessao-mista.ts'),
+    "import 'server-only'\nimport type { LeitorDeSessao, StoreDeSessao } from '../portas/sessao.js'\n" +
+    'export function sessaoMista(opcao: boolean): LeitorDeSessao | StoreDeSessao {\n' +
+    '  return opcao ? { ler: async () => null, gravar: async () => {}, remover: async () => {} } : { ler: async () => null }\n' +
+    '}\n')
+  const erros = verificarFronteira(src)
+  assert.ok(erros.some((e) => e.startsWith("index.ts: exporta 'sessaoMista'")), JSON.stringify(erros))
+  assert.ok(erros.some((e) => e.startsWith("adaptadores/sessao-mista.ts: exporta 'sessaoMista'")), JSON.stringify(erros))
+})

@@ -11,6 +11,7 @@ const ATORES: Readonly<Record<string, string>> = {
   bruno: 'Bruno Analista',
   carla: 'Carla Administradora de Acesso',
   davi: 'Davi Sem Perfil',
+  eva: 'Eva Apenas Leitora',
 }
 
 export const ATORES_DE_DESENVOLVIMENTO: readonly string[] = Object.keys(ATORES)
