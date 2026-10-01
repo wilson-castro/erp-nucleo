@@ -42,7 +42,13 @@ export function simbolosDoShell(src = SRC) {
 }
 
 /** Nomes que, no tipo de um valor, só quem escreve sessão ou autentica tem (portas/sessao.ts, portas/identidade.ts, NucleoDoShell). */
-const CAPACIDADES_DE_ESCRITA = new Set(['gravar', 'remover', 'autenticar', 'entrar', 'encerrar'])
+const CAPACIDADES_DE_ESCRITA = new Set([
+  'gravar', 'remover', 'gravarTransacao', 'consumirTransacao', 'adquirirLockRenovacao',
+  'iniciar', 'concluir', 'renovar', 'encerrar',
+  'iniciarLogin', 'concluirLogin', 'renovarSessao', 'encerrarSessao',
+  // nomes da porta anterior à 0.10.0: um embrulho que os recriasse continua reprovado
+  'autenticar', 'entrar',
+])
 
 /** O tipo dá acesso a escrita de sessão ou a autenticação: por propriedade, retorno (inclusive Promise) ou membro de união. */
 function temEscrita(checker, tipo, vistos = new Set(), profundidade = 0) {

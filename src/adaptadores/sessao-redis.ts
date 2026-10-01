@@ -1,12 +1,15 @@
 import 'server-only'
 import { createHash } from 'node:crypto'
 import type { LeitorDeSessao, StoreDeSessao, SessaoArmazenada } from '../portas/sessao.js'
+import type { TransacaoDeLogin } from '../portas/identidade.js'
 import { ErroDeAplicacao } from '../interno/erros.js'
+import { ehTransacao, validarTtlDoLock } from '../interno/login.js'
 
 /**
  * O mínimo que o adaptador usa do cliente Redis. É a assinatura do `node-redis` (v4+):
- * `createClient()` serve direto. Com `ioredis`, passe um invólucro de três linhas
- * (`set: (k, v, { PX }) => r.set(k, v, 'PX', PX)`). O núcleo não depende de nenhum dos dois.
+ * `createClient()` serve direto. Com `ioredis`, passe um invólucro curto
+ * (`set: (k, v, { PX, NX }) => NX ? r.set(k, v, 'PX', PX, 'NX') : r.set(k, v, 'PX', PX)`,
+ * `getDel: (k) => r.getdel(k)`). O núcleo não depende de nenhum dos dois.
  */
 export interface ClienteRedisDeLeitura {
   get(chave: string): Promise<string | null>
@@ -17,8 +20,11 @@ export interface ClienteRedisDeLeitura {
  * no tipo, e sem permissão no servidor (usuário ACL só com `GET`; auditor_b1_d1_2, V1).
  */
 export interface ClienteRedis extends ClienteRedisDeLeitura {
-  set(chave: string, valor: string, opcoes: { PX: number }): Promise<unknown>
+  /** Com `NX: true`, responde `'OK'` só se gravou e `null` se a chave já existia (`SET NX PX`). */
+  set(chave: string, valor: string, opcoes: { PX: number; NX?: true }): Promise<unknown>
   del(chave: string): Promise<unknown>
+  /** `GETDEL` (Redis 6.2+): lê e apaga numa operação atômica. */
+  getDel(chave: string): Promise<string | null>
 }
 
 export type ConfigSessaoRedis<C extends ClienteRedisDeLeitura = ClienteRedis> = {
@@ -27,7 +33,21 @@ export type ConfigSessaoRedis<C extends ClienteRedisDeLeitura = ClienteRedis> = 
   prefixo?: string
 }
 
+/**
+ * Transação de login e lock de renovação têm prefixo próprio, FORA do de sessão: o usuário ACL
+ * das zonas só lê `erp:sessao:*` (base/showcase/docker-compose.yml), e a transação leva o
+ * `code_verifier` do PKCE. Quem divide a instância entre ambientes troca os três.
+ */
+export type ConfigSessaoRedisDeEscrita = ConfigSessaoRedis & {
+  /** Padrão `erp:login:`. */
+  prefixoLogin?: string
+  /** Padrão `erp:renovacao:`. */
+  prefixoLock?: string
+}
+
 const PREFIXO_PADRAO = 'erp:sessao:'
+const PREFIXO_LOGIN_PADRAO = 'erp:login:'
+const PREFIXO_LOCK_PADRAO = 'erp:renovacao:'
 
 // o id da sessão nunca vira chave crua: quem lista as chaves não ganha cookies válidos
 const chaveDe = (prefixo: string) => (id: string) =>
@@ -71,10 +91,19 @@ export function sessaoRedis(cfg: ConfigSessaoRedis<ClienteRedisDeLeitura>): Leit
 
 /**
  * Escritor: só o shell. Publicado apenas em `@erp/nucleo/shell` (invariante 15). A chave
- * expira junto com a sessão, então o Redis limpa sozinho o que o shell não encerrou.
+ * expira junto com a sessão, então o Redis limpa sozinho o que o shell não encerrou; o mesmo
+ * vale para a transação de login (TTL da própria validade) e para o lock (TTL de quem pede).
  */
-export function sessaoRedisDeEscrita(cfg: ConfigSessaoRedis): StoreDeSessao {
-  const chave = chaveDe(cfg.prefixo ?? PREFIXO_PADRAO)
+export function sessaoRedisDeEscrita(cfg: ConfigSessaoRedisDeEscrita): StoreDeSessao {
+  const prefixo = cfg.prefixo ?? PREFIXO_PADRAO
+  const prefixoLogin = cfg.prefixoLogin ?? PREFIXO_LOGIN_PADRAO
+  const prefixoLock = cfg.prefixoLock ?? PREFIXO_LOCK_PADRAO
+  for (const [nome, p] of [['prefixoLogin', prefixoLogin], ['prefixoLock', prefixoLock]] as const) {
+    if (p.startsWith(prefixo)) throw new Error(`configuracao invalida: ${nome} "${p}" cai dentro do prefixo de sessao "${prefixo}", que as zonas leem`)
+  }
+  const chave = chaveDe(prefixo)
+  const chaveLogin = chaveDe(prefixoLogin)
+  const chaveLock = chaveDe(prefixoLock)
   return {
     ...sessaoRedis(cfg),
     async gravar(id, s) {
@@ -86,5 +115,26 @@ export function sessaoRedisDeEscrita(cfg: ConfigSessaoRedis): StoreDeSessao {
       await semVazar(() => cfg.cliente.set(chave(id), JSON.stringify(s), { PX: restante }))
     },
     async remover(id) { await semVazar(() => cfg.cliente.del(chave(id))) },
+
+    async gravarTransacao(t) {
+      const restante = Math.floor(t.expiraEm - Date.now())
+      if (restante <= 0) return
+      await semVazar(() => cfg.cliente.set(chaveLogin(t.id), JSON.stringify(t), { PX: restante }))
+    },
+    async consumirTransacao(id) {
+      if (typeof id !== 'string' || id.length === 0) return null
+      // GETDEL, não GET + DEL: dois retornos concorrentes com o mesmo cookie não levam a mesma transação
+      const bruto = await semVazar(() => cfg.cliente.getDel(chaveLogin(id)))
+      if (bruto === null) return null
+      try {
+        const v: unknown = JSON.parse(bruto)
+        return ehTransacao(v) && v.id === id ? (v as TransacaoDeLogin) : null
+      } catch { return null }
+    },
+    async adquirirLockRenovacao(idSessao, ttlMs) {
+      validarTtlDoLock(ttlMs)
+      const r = await semVazar(() => cfg.cliente.set(chaveLock(idSessao), '1', { PX: ttlMs, NX: true }))
+      return r === 'OK'
+    },
   }
 }

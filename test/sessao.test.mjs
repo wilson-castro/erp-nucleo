@@ -32,25 +32,13 @@ test('o store em modo leitura nao tem como gravar nem remover (N3)', () => {
   assert.deepEqual(Object.keys(leitor), ['ler'])
 })
 
-test('o nucleo de zona nao tem entrar nem encerrar; o do shell tem', () => {
+test('o nucleo de zona nao tem login, renovacao nem encerramento; o do shell tem', () => {
   assert.deepEqual(Object.keys(zona().sessao).sort(), ['atual', 'exigir'])
   // nem com cast: criarNucleo ignora `escrita`
   const forjado = criarNucleo({ app: 'z', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
     lerCookieDeSessao: async () => undefined, escrita: { store: sessaoArquivoDeEscrita({ dir }), identidade: identidadeDev() } })
   assert.deepEqual(Object.keys(forjado.sessao).sort(), ['atual', 'exigir'])
-  assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'encerrar', 'entrar', 'exigir'])
-})
-
-test('identidadeDev autentica os atores de desenvolvimento e recusa o resto', async () => {
-  const idp = identidadeDev()
-  for (const u of ['ana', 'bruno', 'carla', 'davi', 'eva']) {
-    const s = await idp.autenticar({ usuario: u })
-    assert.equal(s.sub, u)
-    assert.ok(s.accessToken.length > 0)
-  }
-  for (const u of ['ninguem', '__proto__', 'constructor', 'toString']) {
-    assert.equal(await idp.autenticar({ usuario: u }), null, u)
-  }
+  assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'concluirLogin', 'encerrarSessao', 'exigir', 'iniciarLogin', 'renovarSessao'])
 })
 
 test('identidadeDev recusa rodar em producao sem opt-in explicito', () => {
@@ -68,16 +56,6 @@ test('a sessao entregue a aplicacao so tem sub e nome', async () => {
   assert.ok(!JSON.stringify(s).includes('token-secreto'))
 })
 
-test('entrar() devolve so o id opaco — o token nao chega a quem chama', async () => {
-  const n = shell()
-  const id = await n.sessao.entrar({ usuario: 'carla' })
-  assert.equal(typeof id, 'string')
-  assert.ok(!id.includes('dev.'), 'o id nao pode ser o token')
-  const guardada = await sessaoArquivo({ dir }).ler(id)
-  assert.ok(guardada.accessToken.startsWith('dev.carla.'))
-  assert.equal(await n.sessao.entrar({ usuario: 'ninguem' }), null)
-})
-
 test('nenhum nucleo expoe store, identidade ou transporte cru', () => {
   for (const n of [zona(), shell()]) {
     assert.deepEqual(Object.keys(n).sort(), ['acesso', 'destino', 'sessao'])
@@ -90,7 +68,7 @@ test('encerrar no shell acaba a sessao na zona; exigir destruturado continua fun
   await sessaoArquivoDeEscrita({ dir }).gravar('sid-9', viva('davi'))
   const { exigir } = zona('sid-9').sessao
   assert.equal((await exigir()).sub, 'davi')
-  await shell('sid-9').sessao.encerrar('sid-9')
+  await shell('sid-9').sessao.encerrarSessao('sid-9')
   await assert.rejects(() => exigir(), SessaoInvalida)
 })
 

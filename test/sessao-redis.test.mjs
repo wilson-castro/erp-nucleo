@@ -21,10 +21,23 @@ function redisFalso({ agora = () => Date.now() } = {}) {
     },
     async set(k, valor, op) {
       chamadas.push(['set', k, op])
+      // NX: só grava se a chave não existe (ou já venceu), e então o Redis responde null
+      if (op.NX) {
+        const e = dados.get(k)
+        if (e && agora() < e.expira) return null
+      }
       dados.set(k, { valor, expira: agora() + op.PX })
       return 'OK'
     },
     async del(k) { chamadas.push(['del', k]); return dados.delete(k) ? 1 : 0 },
+    // GETDEL é atômico no Redis: o falso não tem await entre ler e apagar
+    async getDel(k) {
+      chamadas.push(['getDel', k])
+      const e = dados.get(k)
+      dados.delete(k)
+      if (!e || agora() >= e.expira) return null
+      return e.valor
+    },
   }
 }
 
@@ -114,11 +127,16 @@ test('Redis fora do ar vira erro normalizado, sem vazar o motivo (invariante 12)
     async get() { throw new Error('ECONNREFUSED 10.0.0.7:6379 senha=hunter2') },
     async set() { throw new Error('ECONNREFUSED 10.0.0.7:6379') },
     async del() { throw new Error('ECONNREFUSED 10.0.0.7:6379') },
+    async getDel() { throw new Error('ECONNREFUSED 10.0.0.7:6379') },
   }
+  const tx = { id: 't', state: 's', codeVerifier: 'v', nonce: 'n', destino: '/', expiraEm: Date.now() + 60_000 }
   for (const f of [
     () => sessaoRedis({ cliente: quebrado }).ler('s'),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).gravar('s', viva('ana')),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).remover('s'),
+    () => sessaoRedisDeEscrita({ cliente: quebrado }).gravarTransacao(tx),
+    () => sessaoRedisDeEscrita({ cliente: quebrado }).consumirTransacao('t'),
+    () => sessaoRedisDeEscrita({ cliente: quebrado }).adquirirLockRenovacao('s', 1_000),
   ]) {
     await assert.rejects(f, (e) => {
       assert.ok(e instanceof ErroDeAplicacao)
@@ -137,13 +155,15 @@ test('shell grava pelo Redis e a zona le a mesma sessao, sem token na leitura pu
     lerCookieDeSessao: async () => cookie,
     escrita: { store: sessaoRedisDeEscrita({ cliente: r }), identidade: identidadeDev() },
   })
-  cookie = await shell.sessao.entrar({ usuario: 'bruno' })
+  const { url, idTransacao } = await shell.sessao.iniciarLogin('/')
+  const state = new URL(url, 'http://shell.invalid').searchParams
+  cookie = (await shell.sessao.concluirLogin(idTransacao, { state: state.get('state'), nonce: state.get('nonce'), usuario: 'bruno' })).id
   const zona = criarNucleo({
     app: 'zona', sessao: sessaoRedis({ cliente: r }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
     lerCookieDeSessao: async () => cookie,
   })
   assert.deepEqual(await zona.sessao.atual(), { sub: 'bruno', nome: 'Bruno Analista' })
-  await shell.sessao.encerrar(cookie)
+  await shell.sessao.encerrarSessao(cookie)
   assert.equal(await zona.sessao.atual(), null)
 })
 
@@ -162,4 +182,102 @@ test('o leitor funciona com um cliente que so tem get (o das zonas: auditor_b1_d
   await sessaoRedisDeEscrita({ cliente: r }).gravar('sid-leitura', viva('ana'))
   const soLeitura = { get: (k) => r.get(k) }
   assert.equal((await sessaoRedis({ cliente: soLeitura }).ler('sid-leitura')).sub, 'ana')
+})
+
+// --- D2: lock de renovação e transação de login (ADR-0013, decisões 3 e 4) ----------------------
+
+const transacao = (extra = {}) => ({
+  id: 'tx-secreta', state: 'st', codeVerifier: 'verificador-pkce', nonce: 'nc', destino: '/zona1', expiraEm: Date.now() + 60_000, ...extra,
+})
+
+test('adquirirLockRenovacao: o primeiro ganha, o segundo perde enquanto o TTL vale, e o lock vence sozinho', async () => {
+  let t = 1_000_000
+  const r = redisFalso({ agora: () => t })
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  assert.equal(await esc.adquirirLockRenovacao('sid', 15_000), true)
+  assert.equal(await esc.adquirirLockRenovacao('sid', 15_000), false)
+  assert.equal(await esc.adquirirLockRenovacao('outra', 15_000), true, 'o lock e por sessao')
+  t += 14_999
+  assert.equal(await esc.adquirirLockRenovacao('sid', 15_000), false)
+  t += 2
+  assert.equal(await esc.adquirirLockRenovacao('sid', 15_000), true, 'nao ha liberacao explicita: o TTL libera')
+})
+
+test('adquirirLockRenovacao usa SET NX PX, com chave por hash fora do prefixo de sessao', async () => {
+  const r = redisFalso()
+  await sessaoRedisDeEscrita({ cliente: r }).adquirirLockRenovacao('sid-secreto', 15_000)
+  const [, chave, op] = r.chamadas.find(([c]) => c === 'set')
+  assert.deepEqual(op, { PX: 15_000, NX: true })
+  assert.match(chave, /^erp:renovacao:[0-9a-f]{64}$/)
+  assert.ok(!chave.includes('sid-secreto'))
+  assert.equal(r.chamadas.filter(([c]) => c === 'del').length, 0, 'o lock nunca e liberado explicitamente')
+})
+
+test('20 pedidos de lock concorrentes no Redis: exatamente um ganha', async () => {
+  const esc = sessaoRedisDeEscrita({ cliente: redisFalso() })
+  const r = await Promise.all(Array.from({ length: 20 }, () => esc.adquirirLockRenovacao('sid', 15_000)))
+  assert.equal(r.filter(Boolean).length, 1)
+})
+
+test('TTL de lock invalido e erro de programacao, nao lock eterno', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  for (const ttl of [0, -1, 1.5, NaN, Infinity, '15000']) {
+    await assert.rejects(() => esc.adquirirLockRenovacao('sid', ttl), TypeError, String(ttl))
+  }
+  assert.equal(r.chamadas.length, 0)
+})
+
+test('transacao de login: gravada com TTL da propria validade e consumida uma vez so, por GETDEL', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  await esc.gravarTransacao(transacao({ expiraEm: Date.now() + 30_000 }))
+  const [, chave, op] = r.chamadas.find(([c]) => c === 'set')
+  assert.match(chave, /^erp:login:[0-9a-f]{64}$/)
+  assert.ok(!chave.includes('tx-secreta'))
+  assert.ok(op.PX > 29_000 && op.PX <= 30_000, `PX=${op.PX}`)
+  const r1 = await Promise.all(Array.from({ length: 10 }, () => esc.consumirTransacao('tx-secreta')))
+  assert.equal(r1.filter(Boolean).length, 1)
+  assert.equal(r1.find(Boolean).codeVerifier, 'verificador-pkce')
+  assert.equal(await esc.consumirTransacao('tx-secreta'), null)
+  assert.ok(r.chamadas.some(([c]) => c === 'getDel'))
+  assert.ok(!r.chamadas.some(([c]) => c === 'get'), 'consumir com GET + DEL separados nao e atomico')
+})
+
+test('transacao vencida, ausente ou corrompida nao e devolvida', async () => {
+  let t = 1_000_000
+  const r = redisFalso({ agora: () => t })
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  await esc.gravarTransacao(transacao({ id: 'curta', expiraEm: Date.now() + 5_000 }))
+  t += 6_000
+  assert.equal(await esc.consumirTransacao('curta'), null)
+  await esc.gravarTransacao(transacao({ id: 'ja-vencida', expiraEm: Date.now() - 1 }))
+  assert.equal(r.dados.size, 0, 'transacao vencida nao e gravada')
+  for (const id of ['', undefined, 42]) assert.equal(await esc.consumirTransacao(id), null)
+  await esc.gravarTransacao(transacao({ id: 'lixo' }))
+  for (const lixo of ['{', 'null', '{"id":"lixo"}', '{"id":"lixo","state":"s","codeVerifier":"v","nonce":"n","destino":"/","expiraEm":"amanha"}']) {
+    r.dados.set([...r.dados.keys()][0], { valor: lixo, expira: Infinity })
+    assert.equal(await esc.consumirTransacao('lixo'), null, lixo)
+    await esc.gravarTransacao(transacao({ id: 'lixo' }))
+  }
+})
+
+test('a zona nao le transacao nem lock: as chaves ficam fora de erp:sessao:* (ACL do usuario zona)', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  await esc.gravarTransacao(transacao())
+  await esc.adquirirLockRenovacao('sid', 15_000)
+  for (const chave of r.dados.keys()) assert.ok(!chave.startsWith('erp:sessao:'), chave)
+  assert.equal(await sessaoRedis({ cliente: r }).ler('tx-secreta'), null)
+})
+
+test('prefixos de login e de lock configuraveis, e recusados se cairem dentro do prefixo de sessao', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r, prefixo: 'hml:sessao:', prefixoLogin: 'hml:login:', prefixoLock: 'hml:renovacao:' })
+  await esc.gravarTransacao(transacao())
+  await esc.adquirirLockRenovacao('sid', 15_000)
+  assert.deepEqual([...r.dados.keys()].map((k) => k.replace(/[0-9a-f]{64}$/, '')).sort(), ['hml:login:', 'hml:renovacao:'])
+  for (const cfg of [{ prefixoLogin: 'erp:sessao:login:' }, { prefixoLock: 'erp:sessao:' }, { prefixo: 'erp:', prefixoLock: 'erp:lock:' }]) {
+    assert.throws(() => sessaoRedisDeEscrita({ cliente: r, ...cfg }), /prefixo/, JSON.stringify(cfg))
+  }
 })

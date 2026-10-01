@@ -1,13 +1,14 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
 import { ehFuncionalidade, type AcessoEfetivo } from '@erp/contratos'
-import type { LeitorDeSessao, EscritorDeSessao, Sessao } from '../portas/sessao.js'
+import type { LeitorDeSessao, EscritorDeSessao, Sessao, SessaoArmazenada } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
 import type { ClienteDeDestino, RegistroDeDestinos } from '../portas/destinos.js'
 import type { FabricaDeAcesso } from '../portas/acesso.js'
 import { criarTransporte } from '../interno/destinos.js'
 import { NaoEncontrado, SessaoInvalida } from '../interno/erros.js'
 import { ID_MODULO } from '../interno/acesso-v2.js'
+import { lerNumeroPositivo } from '../interno/configuracao.js'
 
 export type ConfigDoNucleo = {
   /** Nome da aplicação, enviado ao domínio no cabeçalho `x-erp-chamador`. */
@@ -53,16 +54,38 @@ export type Nucleo = {
 }
 
 /**
- * `store` e `identidade` NÃO são expostos. `identidade.autenticar` devolve a sessão com
- * o `accessToken` dentro, e `store.ler` também. Fazendo a fábrica autenticar, cunhar o id
- * e gravar, o token nunca chega a quem chama: o shell recebe um id opaco e mais nada.
+ * Resultado de `renovarSessao`, sem token: `ausente` (sem sessão válida), `em-dia` (o token não
+ * está na janela de renovação), `em-andamento` (outra requisição tem o lock; esta não espera),
+ * `renovada` (gravada com token novo) ou `revogada` (o IdP recusou; a sessão foi removida).
+ */
+export type EstadoDaRenovacao = 'ausente' | 'em-dia' | 'em-andamento' | 'renovada' | 'revogada'
+
+/**
+ * `store` e `identidade` NÃO são expostos. `identidade.concluir` e `renovar` devolvem a sessão
+ * com os tokens dentro, e `store.ler` também; a transação leva o `code_verifier`. Fazendo a
+ * fábrica guardar a transação, concluir, cunhar o id e gravar, nada disso chega a quem chama:
+ * o shell recebe ids opacos, a URL do IdP e o destino, e mais nada.
  */
 export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
   sessao: Nucleo['sessao'] & {
-    /** Autentica, cunha o id opaco, grava, e devolve **só o id**. */
-    entrar(credencial: unknown): Promise<string | null>
-    /** Remove do store: a sessão acaba em todas as zonas na próxima requisição. */
-    encerrar(id: string): Promise<void>
+    /** Cria e guarda a transação de login. `idTransacao` vai no cookie `__Host-erp-login`. */
+    iniciarLogin(destino?: string): Promise<{ url: string; idTransacao: string }>
+    /**
+     * Consome a transação (uso único, mesmo se o retorno for recusado), conclui no IdP, cunha
+     * um id de sessão NOVO e grava. Devolve só o id e o destino guardado na transação.
+     */
+    concluirLogin(idTransacao: string | undefined, parametros: Record<string, string>): Promise<{ id: string; destino: string } | null>
+    /**
+     * Renovação proativa e serializada (ADR-0013, decisão 4): fora da janela, nada; dentro, só
+     * quem ganha o lock relê a sessão e chama o IdP, e ninguém espera. Erro transitório do IdP
+     * lança, a sessão fica e o lock segura novas tentativas até vencer (backoff).
+     */
+    renovarSessao(id: string | undefined): Promise<EstadoDaRenovacao>
+    /**
+     * Remove do store ANTES de pedir ao IdP a URL de logout: a sessão acaba em todas as zonas
+     * mesmo se o IdP falhar. `urlLogout` é `null` sem sessão ou sem logout no IdP.
+     */
+    encerrarSessao(id: string | undefined): Promise<{ urlLogout: string | null }>
   }
 }
 
@@ -134,22 +157,72 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
 
 /**
  * O núcleo do shell, único escritor da sessão (N3). Publicado só em `@erp/nucleo/shell`.
+ * Lê na criação `ERP_RENOVACAO_JANELA_S` e `ERP_RENOVACAO_LOCK_S` (docs/CONFIGURACAO.md §1).
  */
 export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
+  const janelaMs = lerNumeroPositivo(process.env.ERP_RENOVACAO_JANELA_S, 60, 'ERP_RENOVACAO_JANELA_S', 3_600) * 1_000
+  const lockMs = lerNumeroPositivo(process.env.ERP_RENOVACAO_LOCK_S, 15, 'ERP_RENOVACAO_LOCK_S', 300) * 1_000
   const nucleo = criarNucleo(cfg)
   const { store, identidade } = cfg.escrita
+
+  const valida = async (id: string) => {
+    const s = await cfg.sessao.ler(id)
+    return s && Date.now() < s.expiraEm ? s : null
+  }
+  // sem `tokenExpiraEm` não há o que antecipar: o token vale a sessão inteira
+  const emDia = (s: SessaoArmazenada) => s.tokenExpiraEm === undefined || s.tokenExpiraEm - Date.now() > janelaMs
+
   return {
     ...nucleo,
     sessao: {
       ...nucleo.sessao,
-      async entrar(credencial) {
-        const s = await identidade.autenticar(credencial)
+
+      async iniciarLogin(destino) {
+        const { url, transacao } = await identidade.iniciar(destino)
+        await store.gravarTransacao(transacao)
+        return { url, idTransacao: transacao.id }
+      },
+
+      async concluirLogin(idTransacao, parametros) {
+        if (typeof idTransacao !== 'string' || idTransacao.length === 0) return null
+        const transacao = await store.consumirTransacao(idTransacao)
+        if (!transacao || Date.now() >= transacao.expiraEm) return null
+        const s = await identidade.concluir(parametros, transacao)
         if (!s) return null
+        // id novo a cada login: um id que existisse antes do login não vira sessão autenticada
         const id = randomUUID()
         await store.gravar(id, s)
-        return id
+        return { id, destino: transacao.destino }
       },
-      encerrar: (id) => store.remover(id),
+
+      async renovarSessao(id) {
+        if (typeof id !== 'string' || id.length === 0) return 'ausente'
+        const antes = await valida(id)
+        if (!antes) return 'ausente'
+        if (emDia(antes)) return 'em-dia'
+        if (!(await store.adquirirLockRenovacao(id, lockMs))) return 'em-andamento'
+        // Relê com o lock na mão: outro processo pode ter renovado entre a leitura e o lock, e o
+        // refresh token de antes, com rotação, já foi gasto. Usá-lo derrubaria a sessão no IdP.
+        const s = await valida(id)
+        if (!s) return 'ausente'
+        if (emDia(s)) return 'em-dia'
+        const r = await identidade.renovar(s)
+        if (r.status === 'renovada' && r.sessao.sub === s.sub) {
+          await store.gravar(id, r.sessao)
+          return 'renovada'
+        }
+        // revogada, ou o IdP devolveu outra pessoa: a sessão não continua com nenhuma das duas
+        await store.remover(id)
+        return 'revogada'
+      },
+
+      async encerrarSessao(id) {
+        if (typeof id !== 'string' || id.length === 0) return { urlLogout: null }
+        const s = await cfg.sessao.ler(id)
+        await store.remover(id)
+        if (!s) return { urlLogout: null }
+        return identidade.encerrar(s)
+      },
     },
   }
 }
