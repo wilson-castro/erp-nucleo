@@ -208,8 +208,8 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
         if (emDia(s)) return 'em-dia'
         const r = await identidade.renovar(s)
         if (r.status === 'renovada' && r.sessao.sub === s.sub) {
-          await store.gravar(id, r.sessao)
-          return 'renovada'
+          // regravar, não gravar: se a sessão foi encerrada durante a ida ao IdP, ela não volta
+          return (await store.regravar(id, r.sessao)) ? 'renovada' : 'ausente'
         }
         // revogada, ou o IdP devolveu outra pessoa: a sessão não continua com nenhuma das duas
         await store.remover(id)

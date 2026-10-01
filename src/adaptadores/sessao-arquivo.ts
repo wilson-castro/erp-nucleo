@@ -67,6 +67,13 @@ export function sessaoArquivoDeEscrita(cfg: { dir: string }): StoreDeSessao {
     ...sessaoArquivo(cfg),
     async gravar(id, s) { writeFileSync(arquivo(id), JSON.stringify(s), { mode: 0o600 }) },
     async remover(id) { rmSync(arquivo(id), { force: true }) },
+    // sem `await` entre conferir e gravar: no mesmo processo, nenhum `remover` entra no meio
+    async regravar(id, s) {
+      const f = arquivo(id)
+      if (!existsSync(f)) return false
+      writeFileSync(f, JSON.stringify(s), { mode: 0o600 })
+      return true
+    },
 
     async gravarTransacao(t) {
       writeFileSync(arquivoLogin(t.id), JSON.stringify(t), { mode: 0o600 })

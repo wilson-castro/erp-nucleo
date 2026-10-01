@@ -7,6 +7,7 @@ import { identidadeDev, ATORES_DE_DESENVOLVIMENTO } from '../dist/adaptadores/id
 import { sessaoArquivo, sessaoArquivoDeEscrita } from '../dist/adaptadores/sessao-arquivo.js'
 import { criarNucleoDoShell } from '../dist/fabricas/criarNucleo.js'
 import { acessoFake, sessaoMemoria } from '../dist/testing/index.js'
+import { sessaoRedis, sessaoRedisDeEscrita } from '../dist/adaptadores/sessao-redis.js'
 
 /** O retorno que a etapa de login de desenvolvimento manda ao shell (contrato no comentário de identidade-dev.ts). */
 const retornoDe = (url, usuario) => {
@@ -412,3 +413,45 @@ test('encerrarSessao remove do store ANTES de pedir a URL de logout ao IdP', asy
   assert.deepEqual(await shellCom(store, idp).sessao.encerrarSessao(id), { urlLogout: null })
   assert.deepEqual(await shellCom(store, idp).sessao.encerrarSessao(undefined), { urlLogout: null })
 })
+
+/** Redis falso mínimo com SET NX/XX PX, GETDEL e TTL, para rodar a fábrica sobre o adaptador Redis. */
+function redisMinimo() {
+  const d = new Map()
+  const vivo = (k) => { const e = d.get(k); if (e && Date.now() >= e.expira) d.delete(k); return d.get(k) }
+  return {
+    async get(k) { return vivo(k)?.valor ?? null },
+    async set(k, valor, op) {
+      if (op.NX && vivo(k)) return null
+      if (op.XX && !vivo(k)) return null
+      d.set(k, { valor, expira: Date.now() + op.PX }); return 'OK'
+    },
+    async del(k) { return d.delete(k) ? 1 : 0 },
+    async getDel(k) { const e = vivo(k); d.delete(k); return e ? e.valor : null },
+  }
+}
+
+for (const [nome, criar] of [
+  ['memoria', () => { const s = sessaoMemoria(); return { store: s, leitor: s } }],
+  ['arquivo', () => { const dir = mkdtempSync(join(tmpdir(), 'corrida-')); return { store: sessaoArquivoDeEscrita({ dir }), leitor: sessaoArquivo({ dir }) } }],
+  ['redis', () => { const r = redisMinimo(); return { store: sessaoRedisDeEscrita({ cliente: r }), leitor: sessaoRedis({ cliente: r }) } }],
+]) {
+  test(`${nome}: encerrarSessao durante uma renovacao em curso nao deixa a sessao voltar`, async () => {
+    const { store, leitor } = criar()
+    const base = identidadeDev()
+    let liberar
+    const segurando = new Promise((r) => { liberar = r })
+    let chegou
+    const naRenovacao = new Promise((r) => { chegou = r })
+    const idp = { ...base, renovar: async (s) => { chegou(); await segurando; return base.renovar(s) } }
+    const n = shellCom(store, idp, leitor)
+    const { id } = await logar(n)
+    await store.gravar(id, { ...(await leitor.ler(id)), tokenExpiraEm: Date.now() + 1_000 })
+
+    const renovacao = n.sessao.renovarSessao(id)
+    await naRenovacao
+    await n.sessao.encerrarSessao(id)
+    liberar()
+    assert.equal(await renovacao, 'ausente')
+    assert.equal(await leitor.ler(id), null, 'a renovacao regravou a sessao encerrada')
+  })
+}

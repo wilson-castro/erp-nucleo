@@ -8,7 +8,7 @@ import { ehTransacao, validarTtlDoLock } from '../interno/login.js'
 /**
  * O mínimo que o adaptador usa do cliente Redis. É a assinatura do `node-redis` (v4+):
  * `createClient()` serve direto. Com `ioredis`, passe um invólucro curto
- * (`set: (k, v, { PX, NX }) => NX ? r.set(k, v, 'PX', PX, 'NX') : r.set(k, v, 'PX', PX)`,
+ * (`set: (k, v, { PX, NX, XX }) => r.set(k, v, 'PX', PX, ...(NX ? ['NX'] : XX ? ['XX'] : []))`,
  * `getDel: (k) => r.getdel(k)`). O núcleo não depende de nenhum dos dois.
  */
 export interface ClienteRedisDeLeitura {
@@ -20,8 +20,11 @@ export interface ClienteRedisDeLeitura {
  * no tipo, e sem permissão no servidor (usuário ACL só com `GET`; auditor_b1_d1_2, V1).
  */
 export interface ClienteRedis extends ClienteRedisDeLeitura {
-  /** Com `NX: true`, responde `'OK'` só se gravou e `null` se a chave já existia (`SET NX PX`). */
-  set(chave: string, valor: string, opcoes: { PX: number; NX?: true }): Promise<unknown>
+  /**
+   * Com `NX: true`, responde `'OK'` só se gravou e `null` se a chave já existia (`SET NX PX`);
+   * com `XX: true`, o contrário: só grava se a chave já existe (`SET XX PX`).
+   */
+  set(chave: string, valor: string, opcoes: { PX: number; NX?: true; XX?: true }): Promise<unknown>
   del(chave: string): Promise<unknown>
   /** `GETDEL` (Redis 6.2+): lê e apaga numa operação atômica. */
   getDel(chave: string): Promise<string | null>
@@ -115,6 +118,14 @@ export function sessaoRedisDeEscrita(cfg: ConfigSessaoRedisDeEscrita): StoreDeSe
       await semVazar(() => cfg.cliente.set(chave(id), JSON.stringify(s), { PX: restante }))
     },
     async remover(id) { await semVazar(() => cfg.cliente.del(chave(id))) },
+    async regravar(id, s) {
+      const restante = Math.floor(s.expiraEm - Date.now())
+      if (restante <= 0) {
+        await semVazar(() => cfg.cliente.del(chave(id)))
+        return false
+      }
+      return (await semVazar(() => cfg.cliente.set(chave(id), JSON.stringify(s), { PX: restante, XX: true }))) === 'OK'
+    },
 
     async gravarTransacao(t) {
       const restante = Math.floor(t.expiraEm - Date.now())

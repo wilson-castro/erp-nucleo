@@ -21,6 +21,11 @@ export function sessaoMemoria(): StoreDeSessao {
     ler: async (id) => m.get(id) ?? null,
     gravar: async (id, s) => { m.set(id, s) },
     remover: async (id) => { m.delete(id) },
+    regravar: async (id, s) => {
+      if (!m.has(id)) return false
+      m.set(id, s)
+      return true
+    },
     gravarTransacao: async (t) => { transacoes.set(t.id, t) },
     consumirTransacao: async (id) => {
       const t = transacoes.get(id) ?? null

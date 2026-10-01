@@ -29,6 +29,11 @@ export interface LeitorDeSessao {
 export interface EscritorDeSessao {
   gravar(id: string, s: SessaoArmazenada): Promise<void>
   remover(id: string): Promise<void>
+  /**
+   * Grava só se a sessão ainda existe (`SET XX PX` no Redis); `false` quando não existe mais.
+   * É a escrita da renovação: um `remover` (logout) no meio da ida ao IdP não pode ser desfeito.
+   */
+  regravar(id: string, s: SessaoArmazenada): Promise<boolean>
   /** Guarda a transação de login até `transacao.expiraEm`, fora do alcance do leitor das zonas. */
   gravarTransacao(transacao: TransacaoDeLogin): Promise<void>
   /** Devolve e apaga numa operação só: a mesma transação nunca é devolvida duas vezes. */

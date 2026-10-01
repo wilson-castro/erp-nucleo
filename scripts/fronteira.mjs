@@ -43,7 +43,7 @@ export function simbolosDoShell(src = SRC) {
 
 /** Nomes que, no tipo de um valor, só quem escreve sessão ou autentica tem (portas/sessao.ts, portas/identidade.ts, NucleoDoShell). */
 const CAPACIDADES_DE_ESCRITA = new Set([
-  'gravar', 'remover', 'gravarTransacao', 'consumirTransacao', 'adquirirLockRenovacao',
+  'gravar', 'remover', 'regravar', 'gravarTransacao', 'consumirTransacao', 'adquirirLockRenovacao',
   'iniciar', 'concluir', 'renovar', 'encerrar',
   'iniciarLogin', 'concluirLogin', 'renovarSessao', 'encerrarSessao',
   // nomes da porta anterior à 0.10.0: um embrulho que os recriasse continua reprovado

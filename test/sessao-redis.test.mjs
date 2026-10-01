@@ -26,6 +26,11 @@ function redisFalso({ agora = () => Date.now() } = {}) {
         const e = dados.get(k)
         if (e && agora() < e.expira) return null
       }
+      // XX: só grava se a chave existe e não venceu
+      if (op.XX) {
+        const e = dados.get(k)
+        if (!e || agora() >= e.expira) return null
+      }
       dados.set(k, { valor, expira: agora() + op.PX })
       return 'OK'
     },
@@ -134,6 +139,7 @@ test('Redis fora do ar vira erro normalizado, sem vazar o motivo (invariante 12)
     () => sessaoRedis({ cliente: quebrado }).ler('s'),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).gravar('s', viva('ana')),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).remover('s'),
+    () => sessaoRedisDeEscrita({ cliente: quebrado }).regravar('s', viva('ana')),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).gravarTransacao(tx),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).consumirTransacao('t'),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).adquirirLockRenovacao('s', 1_000),
@@ -280,4 +286,20 @@ test('prefixos de login e de lock configuraveis, e recusados se cairem dentro do
   for (const cfg of [{ prefixoLogin: 'erp:sessao:login:' }, { prefixoLock: 'erp:sessao:' }, { prefixo: 'erp:', prefixoLock: 'erp:lock:' }]) {
     assert.throws(() => sessaoRedisDeEscrita({ cliente: r, ...cfg }), /prefixo/, JSON.stringify(cfg))
   }
+})
+
+test('regravar usa SET XX PX: grava sessao existente e nao ressuscita sessao removida', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  const leitor = sessaoRedis({ cliente: r })
+  assert.equal(await esc.regravar('nunca', viva('ana')), false)
+  assert.equal(await leitor.ler('nunca'), null)
+  await esc.gravar('s', viva('ana'))
+  assert.equal(await esc.regravar('s', { ...viva('ana'), accessToken: 'tk-novo' }), true)
+  assert.equal((await leitor.ler('s')).accessToken, 'tk-novo')
+  const [, , op] = r.chamadas.filter(([c]) => c === 'set').at(-1)
+  assert.equal(op.XX, true)
+  await esc.remover('s')
+  assert.equal(await esc.regravar('s', viva('ana')), false)
+  assert.equal(await leitor.ler('s'), null)
 })
