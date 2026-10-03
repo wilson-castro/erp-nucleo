@@ -410,17 +410,21 @@ test('redirecionamento do IdP nao e seguido (redirect: manual)', async () => {
 
 // --- encerrar ----------------------------------------------------------------------------------
 
-test('encerrar: URL de logout do IdP com id_token_hint, client_id e post_logout_redirect_uri', async () => {
+test('encerrar: URL de logout do IdP so com client_id e post_logout_redirect_uri, sem token nenhum (vai ao navegador)', async () => {
   const srv = await servidorOidc()
   const idp = novoIdp(srv)
   const { sessao } = await logar(idp, srv)
+  assert.ok(sessao.idToken && sessao.accessToken && sessao.refreshToken, 'a sessao do teste precisa ter os tres tokens')
   const { urlLogout } = await idp.encerrar(sessao)
   const u = new URL(urlLogout)
   assert.equal(`${u.origin}${u.pathname}`, `${srv.emissor}/protocol/openid-connect/logout`)
-  assert.equal(u.searchParams.get('id_token_hint'), sessao.idToken)
   assert.equal(u.searchParams.get('client_id'), CLIENTE.clienteId)
   assert.equal(u.searchParams.get('post_logout_redirect_uri'), URL_POS_LOGOUT)
-  assert.ok(!urlLogout.includes(sessao.refreshToken) && !urlLogout.includes(sessao.accessToken))
+  assert.equal(u.searchParams.has('id_token_hint'), false, 'id_token_hint levaria o id_token ao navegador')
+  for (const [nome, token] of Object.entries({ idToken: sessao.idToken, accessToken: sessao.accessToken, refreshToken: sessao.refreshToken })) {
+    assert.ok(!urlLogout.includes(token) && !urlLogout.includes(encodeURIComponent(token)), `${nome} na URL de logout`)
+  }
+  assert.ok(!urlLogout.includes('eyJ'), 'nenhum JWT na URL de logout')
 })
 
 test('encerrar: IdP sem end_session_endpoint devolve null', async () => {

@@ -83,6 +83,9 @@ function ehTransitorio(e: unknown): boolean {
  *   outro erro (inclusive token novo que não passa nas regras acima), lança
  *   `ErroDeAplicacao('ERRO_INTERNO')`, sem detalhe do IdP nem da biblioteca (invariante 12).
  *
+ * - `encerrar` devolve a URL de logout do IdP só com `client_id` e `post_logout_redirect_uri`: ela
+ *   vai ao navegador, então nenhum token entra nela.
+ *
  * O discovery é feito na primeira chamada e guardado; uma falha não fica guardada.
  */
 export function identidadeOidc(config: ConfigIdentidadeOidc): ProvedorDeIdentidade {
@@ -219,11 +222,13 @@ export function identidadeOidc(config: ConfigIdentidadeOidc): ProvedorDeIdentida
       return { status: 'renovada', sessao: s }
     },
 
-    async encerrar(sessao) {
+    // A URL vai ao navegador (303 ou formulário de logout, ADR-0013, decisão 6): leva só `client_id` e
+    // `post_logout_redirect_uri`, nunca `id_token_hint` nem outro token (invariante 1). Sem o hint, o
+    // IdP pode pedir confirmação ao usuário (OIDC RP-Initiated Logout 1.0); é o preço aceito.
+    async encerrar() {
       const cfg = await obter()
       if (!cfg.serverMetadata().end_session_endpoint) return { urlLogout: null }
       const parametros: Record<string, string> = { client_id: config.clienteId }
-      if (sessao.idToken) parametros.id_token_hint = sessao.idToken
       if (urlPosLogout) parametros.post_logout_redirect_uri = urlPosLogout
       return { urlLogout: oidc.buildEndSessionUrl(cfg, parametros).href }
     },
