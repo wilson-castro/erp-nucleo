@@ -204,7 +204,8 @@ function srcMutado(mudancas) {
 
 test('V4: os simbolos do shell saem de shell/index.ts, com o definidor de cada um (nada escrito a mao)', () => {
   const s = simbolosDoShell()
-  assert.deepEqual([...s.keys()].sort(), ['ATORES_DE_DESENVOLVIMENTO', 'criarNucleoDoShell', 'identidadeDev', 'sessaoArquivoDeEscrita', 'sessaoRedisDeEscrita'])
+  assert.equal(s.get('identidadeOidc'), 'adaptadores/identidade-oidc.ts')
+  assert.deepEqual([...s.keys()].sort(), ['ATORES_DE_DESENVOLVIMENTO', 'criarNucleoDoShell', 'identidadeDev', 'identidadeOidc', 'sessaoArquivoDeEscrita', 'sessaoRedisDeEscrita'])
   assert.equal(s.get('sessaoRedisDeEscrita'), 'adaptadores/sessao-redis.ts')
   assert.deepEqual(verificarFronteira(srcMutado({})), [], 'a copia sem mudanca deveria passar')
 })

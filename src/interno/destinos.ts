@@ -7,7 +7,7 @@ import type {
 
 export { DestinoInvalido }
 
-import { lerNumeroPositivo } from './configuracao.js'
+import { lerTimeoutDeDestinoMs } from './configuracao.js'
 
 const METODOS: readonly Metodo[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 /** Métodos que alteram um recurso existente: exigem `If-Match` (invariante 6). */
@@ -15,7 +15,7 @@ const EXIGEM_VERSAO: readonly Metodo[] = ['PUT', 'PATCH', 'DELETE']
 const SEGMENTO_LITERAL = /^[A-Za-z0-9_~-][A-Za-z0-9._~-]*$/
 const PARAMETRO = /^:[A-Za-z][A-Za-z0-9]*$/
 const CONTROLE = /[\u0000-\u001f\u007f]/
-const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000)
+const TIMEOUT_PADRAO_MS = lerTimeoutDeDestinoMs()
 
 type DestinoValidado = Destino & { url: URL }
 

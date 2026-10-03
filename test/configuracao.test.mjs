@@ -21,7 +21,7 @@ test('invalido ou acima do teto: erro na subida com o nome da variavel, nunca um
 test('os timeouts do nucleo tem padrao e teto (docs/CONFIGURACAO.md)', async () => {
   const { readFileSync } = await import('node:fs')
   const fonte = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8')
-  assert.match(fonte('interno/destinos.ts'), /ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000\)/)
+  assert.match(fonte('interno/configuracao.ts'), /ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000\)/)
   assert.match(fonte('fabricas/fragmento.ts'), /ERP_FRAGMENTO_TIMEOUT_MS, 2_000, 'ERP_FRAGMENTO_TIMEOUT_MS', 30_000\)/)
   assert.match(fonte('adaptadores/identidade-dev.ts'), /ERP_TOKEN_VIDA_S, 300, 'ERP_TOKEN_VIDA_S', 3_600\)/)
 })

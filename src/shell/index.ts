@@ -6,5 +6,6 @@ export {
 export { sessaoArquivoDeEscrita } from '../adaptadores/sessao-arquivo.js'
 export { sessaoRedisDeEscrita, type ConfigSessaoRedisDeEscrita } from '../adaptadores/sessao-redis.js'
 export { identidadeDev, ATORES_DE_DESENVOLVIMENTO } from '../adaptadores/identidade-dev.js'
+export { identidadeOidc, type ConfigIdentidadeOidc } from '../adaptadores/identidade-oidc.js'
 export type { EscritorDeSessao, StoreDeSessao } from '../portas/sessao.js'
 export type { ProvedorDeIdentidade, TransacaoDeLogin, ResultadoRenovacao } from '../portas/identidade.js'

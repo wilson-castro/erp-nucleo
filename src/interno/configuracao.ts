@@ -15,3 +15,7 @@ export function lerNumeroPositivo(valor: string | undefined, padrao: number, nom
   if (n > maximo) throw new Error(`configuracao invalida: ${nome} deve ser no maximo ${maximo}, recebeu "${valor}"`)
   return n
 }
+
+/** Timeout de uma chamada de saída do núcleo, em ms (`ERP_DESTINO_TIMEOUT_MS`, docs/CONFIGURACAO.md §2): domínio e IdP. */
+export const lerTimeoutDeDestinoMs = (): number =>
+  lerNumeroPositivo(process.env.ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000)
