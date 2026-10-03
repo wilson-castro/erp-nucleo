@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { politicaDeSeguranca } from '../borda/csp.js'
+import { politicaDeSeguranca, formularioDoLogout, type OpcoesDaPolitica } from '../borda/csp.js'
 import { garantirTraceparent } from '../borda/trace.js'
 
 // O shell tem proxy próprio (sonda, 503, telemetria) e usa as mesmas peças (ADR-0012).
-export { politicaDeSeguranca, garantirTraceparent }
+export { politicaDeSeguranca, formularioDoLogout, garantirTraceparent, type OpcoesDaPolitica }
 
 export type ConfigDoProxy = {
   /** prefixo da aplicação, ex.: '/zona1'. O shell usa '/'. */
@@ -21,6 +21,11 @@ export type ConfigDoProxy = {
   nomeDoCookie?: string
   /** Cookie de toast entre documentos. O proxy o consome: aparece em UM documento só. */
   nomeDoFlash?: string
+  /**
+   * Origens extras de `form-action` (ADR-0013, decisão 6). Ausente: a origem de `IDP_EMISSOR`, lida
+   * na criação, porque a moldura de toda zona tem o formulário "Sair" que o shell manda ao IdP.
+   */
+  formularioPara?: readonly string[]
 }
 
 /** Cabeçalho interno pelo qual o proxy entrega o flash ao layout. Vindo de fora, é apagado. */
@@ -37,6 +42,8 @@ const dentro = (caminho: string, prefixo: string) =>
  */
 export function criarProxy(cfg: ConfigDoProxy) {
   const nome = cfg.nomeDoCookie ?? '__Host-session'
+  const opcoesCsp: OpcoesDaPolitica = { formularioPara: cfg.formularioPara ?? formularioDoLogout(process.env.IDP_EMISSOR) }
+  politicaDeSeguranca('validacao', opcoesCsp)   // origem inválida falha na subida, não a cada requisição
   return function proxy(req: NextRequest): NextResponse {
     const caminho = req.nextUrl.pathname
     // Fora do próprio prefixo, a aplicação não opina.
@@ -55,7 +62,7 @@ export function criarProxy(cfg: ConfigDoProxy) {
     }
 
     const nonce = crypto.randomUUID().replaceAll('-', '')
-    const csp = politicaDeSeguranca(nonce)
+    const csp = politicaDeSeguranca(nonce, opcoesCsp)
     // O nonce vai no cabeçalho CSP da requisição, que é onde a documentação do Next manda
     // pôr; o 16.3.4 também o acha só na resposta (auditor_base_1, X10), então isto é defensivo.
     const headers = new Headers(req.headers)
