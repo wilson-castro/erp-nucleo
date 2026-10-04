@@ -2,7 +2,7 @@ import 'server-only'
 import * as oidc from 'openid-client'
 import type { ProvedorDeIdentidade, ResultadoRenovacao } from '../portas/identidade.js'
 import type { SessaoArmazenada } from '../portas/sessao.js'
-import { lerNumeroPositivo, lerTimeoutDeDestinoMs } from '../interno/configuracao.js'
+import { httpPermitido, lerNumeroPositivo, lerTimeoutDeDestinoMs } from '../interno/configuracao.js'
 import { ErroDeAplicacao } from '../interno/erros.js'
 import { lerVidaDaTransacaoMs, novaTransacao } from '../interno/login.js'
 
@@ -29,12 +29,12 @@ function recusar(campo: string, motivo: string): never {
   throw new Error(`identidadeOidc: ${campo} ${motivo}`)
 }
 
-/** `http://` só fora de produção (ADR-0013, decisão 5). */
+/** `http://` só fora de produção, ou em produção com `ERP_PERMITIR_HTTP_LOCAL=1` e host de loopback (ADR-0013, decisão 5 e adendo 2). */
 function validarUrl(campo: string, valor: unknown, soOrigemECaminho = false): URL {
   let url: URL
   try { url = new URL(String(valor)) } catch { recusar(campo, 'nao e URL absoluta') }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') recusar(campo, 'precisa de https')
-  if (url.protocol === 'http:' && process.env.NODE_ENV === 'production') recusar(campo, 'precisa de https em producao')
+  if (!httpPermitido(url)) recusar(campo, 'precisa de https em producao')
   if (url.username || url.password) recusar(campo, 'nao pode carregar credencial na URL')
   if (soOrigemECaminho && (url.search || url.hash)) recusar(campo, 'nao pode ter query nem fragmento')
   return url

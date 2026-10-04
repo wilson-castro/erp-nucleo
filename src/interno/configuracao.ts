@@ -1,5 +1,8 @@
 import 'server-only'
 
+/** Regra de `http://` em produção (ADR-0013, adendo 2); mora em `borda/` porque a CSP também a usa. */
+export { httpPermitido } from '../borda/http-local.js'
+
 /**
  * Parâmetro numérico lido do ambiente (docs/CONFIGURACAO.md). Ausente: o padrão. Presente e
  * inválido (não inteiro, zero, negativo, acima do teto): erro na subida, nunca um valor que
