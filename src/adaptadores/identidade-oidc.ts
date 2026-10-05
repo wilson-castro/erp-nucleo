@@ -36,7 +36,8 @@ function validarUrl(campo: string, valor: unknown, soOrigemECaminho = false): UR
   if (url.protocol !== 'https:' && url.protocol !== 'http:') recusar(campo, 'precisa de https')
   if (!httpPermitido(url)) recusar(campo, 'precisa de https em producao')
   if (url.username || url.password) recusar(campo, 'nao pode carregar credencial na URL')
-  if (soOrigemECaminho && (url.search || url.hash)) recusar(campo, 'nao pode ter query nem fragmento')
+  // compara o texto, não `search`/`hash`: `?` e `#` vazios no fim deixam os dois vazios, e o IdP compara a URL inteira
+  if (soOrigemECaminho && url.href !== url.origin + url.pathname) recusar(campo, 'nao pode ter query nem fragmento')
   return url
 }
 

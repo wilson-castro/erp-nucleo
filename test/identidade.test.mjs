@@ -750,15 +750,17 @@ const shellRegistrando = (store, identidade) => {
   return { n, falhas }
 }
 
-test('janela >= vida do token: registra uma vez por sessao, so codigo e supportId, e nao renova em laco', async () => {
+test('janela >= vida do token: registra uma vez por sessao, so motivo, codigo e supportId, e nao renova em laco', async () => {
   await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
     const store = sessaoMemoria()
     const idp = idpContador()
     const { n, falhas } = shellRegistrando(store, idp)
     const { id } = await logar(n)
     assert.equal(falhas.length, 1, 'a violacao nao foi registrada no login')
-    assert.deepEqual(Object.keys(falhas[0]).sort(), ['codigo', 'supportId'])
+    assert.deepEqual(Object.keys(falhas[0]).sort(), ['codigo', 'motivo', 'supportId'])
     assert.equal(falhas[0].codigo, 'ERRO_INTERNO')
+    // o motivo diz qual falha foi, sem dado da sessão: com `registrarFalha` injetado, o log ainda nomeia a causa
+    assert.equal(falhas[0].motivo, 'janela-de-renovacao')
     assert.match(falhas[0].supportId, /^[0-9a-f-]{36}$/)
     const s = await store.ler(id)
     for (const segredo of [s.accessToken, s.refreshToken]) assert.ok(!JSON.stringify(falhas).includes(segredo), 'token no registro')
@@ -798,7 +800,7 @@ test('token cortado pelo fim da sessao nao conta como vida curta: nada a registr
   })
 })
 
-test('registro padrao da violacao: uma linha no console do servidor so com codigo e supportId', async () => {
+test('registro padrao da violacao: uma linha no console do servidor so com motivo, codigo e supportId', async () => {
   await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
     const store = sessaoMemoria()
     const linhas = []
@@ -808,8 +810,100 @@ test('registro padrao da violacao: uma linha no console do servidor so com codig
       const { id } = await logar(shellCom(store, identidadeDev()))
       const s = await store.ler(id)
       assert.equal(linhas.length, 1, `linhas: ${linhas}`)
-      assert.match(linhas[0], /codigo=ERRO_INTERNO supportId=[0-9a-f-]{36}$/)
+      assert.match(linhas[0], /motivo=janela-de-renovacao codigo=ERRO_INTERNO supportId=[0-9a-f-]{36}$/)
       for (const segredo of [s.accessToken, s.refreshToken, 'ana']) assert.ok(!linhas[0].includes(segredo), `vazou ${segredo}`)
+    } finally { console.error = original }
+  })
+})
+
+test('janela entre metade da vida e a vida inteira (40 s, token de 60 s) tambem viola: registra e usa metade da vida', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '40' }, async () => {
+    const store = sessaoMemoria()
+    const idp = idpContador()
+    const { n, falhas } = shellRegistrando(store, idp)
+    const { id } = await logar(n)
+    assert.equal(falhas.length, 1, 'janela de 40 s com token de 60 s nao foi registrada')
+    // 35 s restantes: dentro da janela configurada (40 s), fora da efetiva (30 s)
+    await store.gravar(id, { ...(await store.ler(id)), tokenExpiraEm: Date.now() + 35_000 })
+    assert.equal(await n.sessao.renovarSessao(id), 'em-dia')
+    assert.equal(idp.renovacoes, 0)
+  })
+})
+
+test('token renovado cortado pelo fim da sessao: a vida medida antes e descartada e a janela configurada volta', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const store = sessaoMemoria()
+    // provedor que devolve a sessão de antes com o token cortado no fim dela, levando o `tokenVidaMs` junto
+    const idp = idpContador()
+    idp.renovar = async (s) => {
+      idp.renovacoes++
+      const expiraEm = Date.now() + 100_000
+      return { status: 'renovada', sessao: { ...s, accessToken: `${s.accessToken}.novo`, expiraEm, tokenExpiraEm: expiraEm } }
+    }
+    const { n, falhas } = shellRegistrando(store, idp)
+    const { id } = await logar(n)
+    assert.equal((await store.ler(id)).tokenVidaMs > 0, true, 'o login nao mediu a vida do token')
+    await store.gravar(id, { ...(await store.ler(id)), tokenExpiraEm: Date.now() + 29_000 })
+    assert.equal(await n.sessao.renovarSessao(id), 'renovada')
+    const s = await store.ler(id)
+    assert.equal(s.tokenExpiraEm, s.expiraEm)
+    assert.equal('tokenVidaMs' in s, false, `ficou a vida de antes: ${s.tokenVidaMs}`)
+    // sem vida conhecida, vale a janela configurada (60 s): com 45 s restantes, tenta renovar (o lock da renovação
+    // anterior ainda vale, e o token ainda é válido: segue com ele); com a vida de antes (janela 30 s), estaria em dia
+    await store.gravar(id, { ...s, tokenExpiraEm: Date.now() + 45_000 })
+    assert.equal(await n.sessao.renovarSessao(id), 'em-andamento')
+    assert.equal(falhas.length, 1)
+  })
+})
+
+test('sessao antiga sem tokenVidaMs usa a janela configurada e registra a violacao na primeira renovacao', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const store = sessaoMemoria()
+    const idp = idpContador()
+    const { n, falhas } = shellRegistrando(store, idp)
+    const { id } = await logar(n)
+    // como gravada por um shell anterior ao 0.10.2: sem o campo
+    const { tokenVidaMs, ...antiga } = await store.ler(id)
+    assert.equal(typeof tokenVidaMs, 'number')
+    falhas.length = 0
+    // 45 s restantes: com a vida conhecida (janela 30 s) estaria em dia; sem ela, vale a janela de 60 s
+    await store.gravar(id, { ...antiga, tokenExpiraEm: Date.now() + 45_000 })
+    assert.equal(await n.sessao.renovarSessao(id), 'renovada')
+    assert.equal(idp.renovacoes, 1)
+    assert.equal(falhas.length, 1, 'a renovacao da sessao antiga nao registrou a violacao')
+    assert.equal(typeof (await store.ler(id)).tokenVidaMs, 'number', 'a renovacao nao mediu a vida do token novo')
+  })
+})
+
+test('registrarFalha que lanca ou rejeita nao derruba o login nem a renovacao: a falha vai ao console', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const linhas = []
+    const original = console.error
+    console.error = (...a) => linhas.push(a.join(' '))
+    try {
+      for (const registrarFalha of [() => { throw new Error('registro fora') }, async () => { throw new Error('registro fora') }]) {
+        linhas.length = 0
+        const store = sessaoMemoria()
+        const idp = idpContador()
+        const n = criarNucleoDoShell({
+          app: 'shell', sessao: store, destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
+          lerCookieDeSessao: async () => undefined, escrita: { store, identidade: idp }, registrarFalha,
+        })
+        const r = await logar(n)
+        assert.ok(r?.id, 'o login caiu com o registro')
+        assert.ok(await store.ler(r.id), 'a sessao nao foi gravada')
+        // renovação que faz a violação aparecer (sessão antiga, sem a vida medida)
+        const { tokenVidaMs: _, ...antiga } = await store.ler(r.id)
+        await store.gravar(r.id, { ...antiga, tokenExpiraEm: Date.now() + 29_000 })
+        assert.equal(await n.sessao.renovarSessao(r.id), 'renovada')
+        assert.equal(idp.renovacoes, 1)
+        await new Promise((ok) => setImmediate(ok))
+        assert.equal(linhas.length, 2, `linhas: ${linhas}`)
+        for (const l of linhas) {
+          assert.match(l, /motivo=janela-de-renovacao codigo=ERRO_INTERNO supportId=[0-9a-f-]{36}$/)
+          assert.ok(!l.includes('registro fora'), 'a mensagem do erro do registro foi ao console')
+        }
+      }
     } finally { console.error = original }
   })
 })

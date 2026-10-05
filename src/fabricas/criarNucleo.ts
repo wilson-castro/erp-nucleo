@@ -28,8 +28,12 @@ export type ConfigDoNucleo = {
   lerTraceparent?: () => Promise<string | undefined>
 }
 
-/** Falha registrada no servidor: só código e `supportId`, nunca token nem dado da pessoa (invariante 12). */
-export type FalhaDoNucleo = { codigo: CodigoErro; supportId: string }
+/**
+ * Falha registrada no servidor: motivo fixo, código e `supportId`, nunca token nem dado da pessoa (invariante 12).
+ * `motivo` nomeia a causa para quem lê o log; `janela-de-renovacao` é `ERP_RENOVACAO_JANELA_S` maior ou igual
+ * a metade da vida do token.
+ */
+export type FalhaDoNucleo = { motivo: 'janela-de-renovacao'; codigo: CodigoErro; supportId: string }
 
 /** Só o shell passa `escrita`. É o que faz dele o único escritor da sessão (N3). */
 export type ConfigDoNucleoDoShell = ConfigDoNucleo & {
@@ -201,8 +205,17 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
   }
   const nucleo = criarNucleo(cfg)
   const { store, identidade } = cfg.escrita
-  const registrarFalha = cfg.registrarFalha ?? ((f: FalhaDoNucleo) =>
-    console.error(`[renovacao] ERP_RENOVACAO_JANELA_S >= metade da vida do token: codigo=${f.codigo} supportId=${f.supportId}`))
+  const registrarNoConsole = (f: FalhaDoNucleo) =>
+    console.error(`[renovacao] ERP_RENOVACAO_JANELA_S >= metade da vida do token: motivo=${f.motivo} codigo=${f.codigo} supportId=${f.supportId}`)
+  // O registro acontece depois da ida ao IdP: se o injetado falha (lança ou rejeita), o login e a renovação
+  // seguem e a falha vai ao console. O erro do registro não é impresso: pode carregar o que não deve.
+  const registrarFalha = (f: FalhaDoNucleo) => {
+    if (!cfg.registrarFalha) return registrarNoConsole(f)
+    try {
+      const r: unknown = cfg.registrarFalha(f)
+      if (r instanceof Promise) r.catch(() => registrarNoConsole(f))
+    } catch { registrarNoConsole(f) }
+  }
 
   const valida = async (id: string) => {
     const s = await cfg.sessao.ler(id)
@@ -231,7 +244,7 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
     const medida: SessaoArmazenada = s.tokenExpiraEm !== undefined && s.tokenExpiraEm < s.expiraEm
       ? { ...resto, tokenVidaMs: s.tokenExpiraEm - Date.now() }
       : resto
-    if (violaJanela(medida) && !violaJanela(anterior)) registrarFalha({ codigo: 'ERRO_INTERNO', supportId: randomUUID() })
+    if (violaJanela(medida) && !violaJanela(anterior)) registrarFalha({ motivo: 'janela-de-renovacao', codigo: 'ERRO_INTERNO', supportId: randomUUID() })
     return medida
   }
 
