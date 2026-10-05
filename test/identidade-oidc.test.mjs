@@ -187,6 +187,19 @@ test('iniciar: URL de autorizacao do discovery com PKCE S256, state e nonce da t
   assert.ok(transacao.codeVerifier.length >= 43)
 })
 
+// O id da transação é o valor do cookie __Host-erp-login: opaco, só do navegador (ADR-0013, decisão 3). Se fosse o
+// state, iria na URL de autorização e voltaria na de retorno; quem visse `/api/auth/retorno?code&state` teria código
+// e cookie. Nonce e state também são valores independentes, nunca derivados um do outro.
+test('iniciar: id da transacao (cookie __Host-erp-login) independente de state, nonce e code_verifier, e fora da URL', async () => {
+  const srv = await servidorOidc()
+  const { url, transacao } = await novoIdp(srv).iniciar('/zona1')
+  const valores = { id: transacao.id, state: transacao.state, nonce: transacao.nonce, codeVerifier: transacao.codeVerifier }
+  for (const [nome, v] of Object.entries(valores)) assert.ok(typeof v === 'string' && v.length >= 43, `${nome} curto ou ausente`)
+  assert.equal(new Set(Object.values(valores)).size, 4, `valores repetidos na transacao: ${JSON.stringify(Object.keys(valores))}`)
+  assert.ok(!url.includes(transacao.id), 'o id da transacao nao pode ir na URL de autorizacao')
+  for (const [, v] of new URL(url).searchParams) assert.ok(!v.includes(transacao.id), 'id da transacao num parametro da autorizacao')
+})
+
 test('iniciar: destino externo vira "/" e a transacao vale ERP_LOGIN_TRANSACAO_S', async () => {
   const srv = await servidorOidc()
   await comAmbiente({ ERP_LOGIN_TRANSACAO_S: '90' }, async () => {

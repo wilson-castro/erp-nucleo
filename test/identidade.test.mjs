@@ -33,6 +33,10 @@ test('iniciar devolve url e transacao com segredos aleatorios e unicos a cada ch
   assert.equal(u.pathname, '/login/dev')
   assert.equal(u.searchParams.get('state'), a.transacao.state)
   assert.ok(!a.url.includes(a.transacao.codeVerifier), 'o code_verifier nao pode ir ao navegador')
+  // o id (cookie __Host-erp-login) e opaco: nao e o state nem o nonce, e nao vai na URL (ADR-0013, decisao 3)
+  const { id, state, nonce, codeVerifier } = a.transacao
+  assert.equal(new Set([id, state, nonce, codeVerifier]).size, 4, 'id, state, nonce e code_verifier precisam ser independentes')
+  assert.ok(!a.url.includes(id), 'o id da transacao nao pode ir na URL')
 })
 
 test('iniciar so aceita destino interno: o resto vira "/" (redirecionamento aberto)', async () => {
