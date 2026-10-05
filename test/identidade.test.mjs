@@ -8,6 +8,8 @@ import { sessaoArquivo, sessaoArquivoDeEscrita } from '../dist/adaptadores/sessa
 import { criarNucleoDoShell } from '../dist/fabricas/criarNucleo.js'
 import { acessoFake, sessaoMemoria } from '../dist/testing/index.js'
 import { sessaoRedis, sessaoRedisDeEscrita } from '../dist/adaptadores/sessao-redis.js'
+import { novaTransacao } from '../dist/interno/login.js'
+import { comSorteiosRegistrados, conferirQuatroSorteios, conferirSegredosForaDoPublico } from './apoio-transacao.mjs'
 
 /** O retorno que a etapa de login de desenvolvimento manda ao shell (contrato no comentário de identidade-dev.ts). */
 const retornoDe = (url, usuario) => {
@@ -37,6 +39,21 @@ test('iniciar devolve url e transacao com segredos aleatorios e unicos a cada ch
   const { id, state, nonce, codeVerifier } = a.transacao
   assert.equal(new Set([id, state, nonce, codeVerifier]).size, 4, 'id, state, nonce e code_verifier precisam ser independentes')
   assert.ok(!a.url.includes(id), 'o id da transacao nao pode ir na URL')
+})
+
+// O id (cookie __Host-erp-login) e o code_verifier são segredos; state e nonce vão na URL. Valores só
+// diferentes entre si não bastam: `id = sha256(state)` ou `codeVerifier = state + '.x'` são diferentes e
+// calculáveis por quem vê a URL de retorno. Os quatro precisam ser sorteios independentes (auditor_d2_2).
+test('novaTransacao: id, state, codeVerifier e nonce sao quatro sorteios independentes de 32 bytes ou mais', async () => {
+  const { resultado: t, sorteios } = await comSorteiosRegistrados(() => novaTransacao('/zona1', 60_000))
+  conferirQuatroSorteios(t, sorteios)
+  assert.equal(sorteios.length, 4, `sorteios feitos: ${sorteios.length}`)
+})
+
+test('identidadeDev.iniciar: os quatro valores da transacao sao sorteios independentes e os segredos nao saem da URL', async () => {
+  const { resultado: { url, transacao }, sorteios } = await comSorteiosRegistrados(() => identidadeDev().iniciar('/zona1'))
+  conferirQuatroSorteios(transacao, sorteios)
+  conferirSegredosForaDoPublico(transacao, url)
 })
 
 test('iniciar so aceita destino interno: o resto vira "/" (redirecionamento aberto)', async () => {

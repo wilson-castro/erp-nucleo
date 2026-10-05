@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { identidadeOidc } from '../dist/adaptadores/identidade-oidc.js'
 import { ErroDeAplicacao } from '../dist/interno/erros.js'
+import { comSorteiosRegistrados, conferirQuatroSorteios, conferirSegredosForaDoPublico } from './apoio-transacao.mjs'
 
 // Timeout por teste e fechamento garantido: um assert que falha não pode deixar a suíte pendurada.
 const test = (nome, fn) => testNode(nome, { timeout: 5000 }, fn)
@@ -198,6 +199,31 @@ test('iniciar: id da transacao (cookie __Host-erp-login) independente de state, 
   assert.equal(new Set(Object.values(valores)).size, 4, `valores repetidos na transacao: ${JSON.stringify(Object.keys(valores))}`)
   assert.ok(!url.includes(transacao.id), 'o id da transacao nao pode ir na URL de autorizacao')
   for (const [, v] of new URL(url).searchParams) assert.ok(!v.includes(transacao.id), 'id da transacao num parametro da autorizacao')
+  // nem calculavel a partir do que vai na URL: contido, sha256 ou sha512 de state, nonce ou parametro
+  conferirSegredosForaDoPublico(transacao, url)
+})
+
+// Diferentes entre si não bastam: os quatro valores são sorteios independentes de 32 bytes ou mais da fonte
+// aleatória, e nenhum é derivado de outro (auditor_d2_2: id = sha256(state), id = state + sufixo e
+// codeVerifier = sha256(state) passavam).
+test('iniciar: id, state, code_verifier e nonce sao sorteios independentes de 32 bytes ou mais', async () => {
+  const srv = await servidorOidc()
+  const idp = novoIdp(srv)
+  await idp.iniciar('/') // discovery fora da medicao
+  const { resultado: { transacao }, sorteios } = await comSorteiosRegistrados(() => idp.iniciar('/zona1'))
+  conferirQuatroSorteios(transacao, sorteios)
+})
+
+// Rodando sozinho, este arquivo pega valores constantes: duas chamadas a iniciar dao valores diferentes.
+test('iniciar: id, state, code_verifier, nonce e a URL mudam a cada chamada', async () => {
+  const srv = await servidorOidc()
+  const idp = novoIdp(srv)
+  const a = await idp.iniciar('/zona1')
+  const b = await idp.iniciar('/zona1')
+  for (const campo of ['id', 'state', 'codeVerifier', 'nonce']) {
+    assert.notEqual(a.transacao[campo], b.transacao[campo], `${campo} repetido entre duas chamadas`)
+  }
+  assert.notEqual(a.url, b.url)
 })
 
 test('iniciar: destino externo vira "/" e a transacao vale ERP_LOGIN_TRANSACAO_S', async () => {
