@@ -875,13 +875,14 @@ test('sessao antiga sem tokenVidaMs usa a janela configurada e registra a violac
   })
 })
 
-test('registrarFalha que lanca ou rejeita nao derruba o login nem a renovacao: a falha vai ao console', async () => {
+test('registrarFalha que lanca, rejeita ou devolve thenable que rejeita nao derruba o login nem a renovacao: a falha vai ao console', async () => {
   await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
     const linhas = []
     const original = console.error
     console.error = (...a) => linhas.push(a.join(' '))
     try {
-      for (const registrarFalha of [() => { throw new Error('registro fora') }, async () => { throw new Error('registro fora') }]) {
+      const thenableQueRejeita = () => ({ then(_ok, falha) { falha(new Error('registro fora')) } })
+      for (const registrarFalha of [() => { throw new Error('registro fora') }, async () => { throw new Error('registro fora') }, thenableQueRejeita]) {
         linhas.length = 0
         const store = sessaoMemoria()
         const idp = idpContador()

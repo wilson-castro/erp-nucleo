@@ -213,7 +213,8 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
     if (!cfg.registrarFalha) return registrarNoConsole(f)
     try {
       const r: unknown = cfg.registrarFalha(f)
-      if (r instanceof Promise) r.catch(() => registrarNoConsole(f))
+      // Promise.resolve adota também o thenable não nativo; com valor comum, o .catch não roda.
+      void Promise.resolve(r).catch(() => registrarNoConsole(f))
     } catch { registrarNoConsole(f) }
   }
 
