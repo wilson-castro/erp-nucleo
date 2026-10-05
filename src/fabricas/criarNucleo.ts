@@ -1,5 +1,6 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as pausa } from 'node:timers/promises'
 import { ehFuncionalidade, type AcessoEfetivo } from '@erp/contratos'
 import type { LeitorDeSessao, EscritorDeSessao, Sessao, SessaoArmazenada } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
@@ -8,7 +9,7 @@ import type { FabricaDeAcesso } from '../portas/acesso.js'
 import { criarTransporte } from '../interno/destinos.js'
 import { NaoEncontrado, SessaoInvalida } from '../interno/erros.js'
 import { ID_MODULO } from '../interno/acesso-v2.js'
-import { lerNumeroPositivo } from '../interno/configuracao.js'
+import { lerInteiroEntre, lerNumeroPositivo } from '../interno/configuracao.js'
 
 export type ConfigDoNucleo = {
   /** Nome da aplicação, enviado ao domínio no cabeçalho `x-erp-chamador`. */
@@ -54,8 +55,10 @@ export type Nucleo = {
 }
 
 /**
- * Resultado de `renovarSessao`, sem token: `ausente` (sem sessão válida), `em-dia` (o token não
- * está na janela de renovação), `em-andamento` (outra requisição tem o lock; esta não espera),
+ * Resultado de `renovarSessao`, sem token: `ausente` (sem sessão válida, ou encerrada durante a
+ * espera), `em-dia` (o token não está na janela de renovação, ou outra requisição o renovou enquanto
+ * esta esperava), `em-andamento` (outra requisição tem o lock e esta segue sem token novo: com o token
+ * ainda válido, sem esperar; com ele vencido, depois de esperar até `ERP_RENOVACAO_ESPERA_MS`),
  * `renovada` (gravada com token novo) ou `revogada` (o IdP recusou; a sessão foi removida).
  */
 export type EstadoDaRenovacao = 'ausente' | 'em-dia' | 'em-andamento' | 'renovada' | 'revogada'
@@ -77,8 +80,12 @@ export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
     concluirLogin(idTransacao: string | undefined, parametros: Record<string, string>): Promise<{ id: string; destino: string } | null>
     /**
      * Renovação proativa e serializada (ADR-0013, decisão 4): fora da janela, nada; dentro, só
-     * quem ganha o lock relê a sessão e chama o IdP, e ninguém espera. Erro transitório do IdP
-     * lança, a sessão fica e o lock segura novas tentativas até vencer (backoff).
+     * quem ganha o lock relê a sessão e chama o IdP. Quem perde o lock com o token ainda válido
+     * não espera. Com o token já vencido (D19-B), quem perde relê a sessão no store a cada
+     * `ERP_RENOVACAO_ESPERA_PASSO_MS` até `ERP_RENOVACAO_ESPERA_MS`: token válido é `em-dia`, sessão
+     * sumida é `ausente`, o teto é `em-andamento`. A espera nunca chama o IdP: o refresh token é gasto
+     * uma vez só. Erro transitório do IdP lança, a sessão fica e o lock segura novas tentativas até
+     * vencer (backoff); nesse tempo, cada requisição com o token vencido espera o teto.
      */
     renovarSessao(id: string | undefined): Promise<EstadoDaRenovacao>
     /**
@@ -157,11 +164,22 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
 
 /**
  * O núcleo do shell, único escritor da sessão (N3). Publicado só em `@erp/nucleo/shell`.
- * Lê na criação `ERP_RENOVACAO_JANELA_S` e `ERP_RENOVACAO_LOCK_S` (docs/CONFIGURACAO.md §1).
+ * Lê e valida na criação `ERP_RENOVACAO_JANELA_S`, `ERP_RENOVACAO_LOCK_S`, `ERP_RENOVACAO_ESPERA_MS`
+ * e `ERP_RENOVACAO_ESPERA_PASSO_MS` (docs/CONFIGURACAO.md §1).
  */
 export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
   const janelaMs = lerNumeroPositivo(process.env.ERP_RENOVACAO_JANELA_S, 60, 'ERP_RENOVACAO_JANELA_S', 3_600) * 1_000
   const lockMs = lerNumeroPositivo(process.env.ERP_RENOVACAO_LOCK_S, 15, 'ERP_RENOVACAO_LOCK_S', 300) * 1_000
+  // D19-B: espera de quem perde o lock com o token vencido; `0` desliga. Menor que o lock: depois
+  // dele, outra requisição pode ganhar o lock, e esperar mais não serve a ninguém.
+  const esperaMs = lerInteiroEntre(process.env.ERP_RENOVACAO_ESPERA_MS, 2_000, 'ERP_RENOVACAO_ESPERA_MS', 0, 300_000)
+  if (esperaMs >= lockMs) {
+    throw new Error(`configuracao invalida: ERP_RENOVACAO_ESPERA_MS deve ser menor que ERP_RENOVACAO_LOCK_S x 1000 (${lockMs}), recebeu "${esperaMs}"`)
+  }
+  const passoMs = lerInteiroEntre(process.env.ERP_RENOVACAO_ESPERA_PASSO_MS, 50, 'ERP_RENOVACAO_ESPERA_PASSO_MS', 10, 300_000)
+  if (esperaMs > 0 && passoMs >= esperaMs) {
+    throw new Error(`configuracao invalida: ERP_RENOVACAO_ESPERA_PASSO_MS deve ser menor que ERP_RENOVACAO_ESPERA_MS (${esperaMs}), recebeu "${passoMs}"`)
+  }
   const nucleo = criarNucleo(cfg)
   const { store, identidade } = cfg.escrita
 
@@ -171,6 +189,19 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
   }
   // sem `tokenExpiraEm` não há o que antecipar: o token vale a sessão inteira
   const emDia = (s: SessaoArmazenada) => s.tokenExpiraEm === undefined || s.tokenExpiraEm - Date.now() > janelaMs
+  const tokenVale = (s: SessaoArmazenada) => s.tokenExpiraEm === undefined || Date.now() < s.tokenExpiraEm
+
+  // Só relê o store, nunca o IdP. Volta no máximo um passo depois do teto (a última pausa é cortada nele).
+  const esperarRenovacao = async (id: string): Promise<EstadoDaRenovacao> => {
+    const limite = Date.now() + esperaMs
+    while (Date.now() < limite) {
+      await pausa(Math.min(passoMs, limite - Date.now()))
+      const s = await valida(id)
+      if (!s) return 'ausente'
+      if (tokenVale(s)) return 'em-dia'
+    }
+    return 'em-andamento'
+  }
 
   return {
     ...nucleo,
@@ -200,7 +231,11 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
         const antes = await valida(id)
         if (!antes) return 'ausente'
         if (emDia(antes)) return 'em-dia'
-        if (!(await store.adquirirLockRenovacao(id, lockMs))) return 'em-andamento'
+        if (!(await store.adquirirLockRenovacao(id, lockMs))) {
+          // Token ainda válido: segue com ele, sem esperar (ADR-0013, decisão 4). Vencido, seguir com
+          // ele leva ao login com a sessão intacta (D19): espera o vencedor gravar o token novo.
+          return tokenVale(antes) ? 'em-andamento' : esperarRenovacao(id)
+        }
         // Relê com o lock na mão: outro processo pode ter renovado entre a leitura e o lock, e o
         // refresh token de antes, com rotação, já foi gasto. Usá-lo derrubaria a sessão no IdP.
         const s = await valida(id)

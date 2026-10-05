@@ -476,3 +476,195 @@ for (const [nome, criar] of [
     assert.equal(await leitor.ler(id), null, 'a renovacao regravou a sessao encerrada')
   })
 }
+
+// --- D19-B: com o token JÁ VENCIDO, quem perde o lock espera a renovação do vencedor ------------------
+// Na janela (token ainda válido) quem perde não espera (ADR-0013, decisão 4). Vencido, seguir com o token
+// morto leva ao /login com a sessão intacta (DEFERRED.md D19): o perdedor relê a sessão no store, a cada
+// ERP_RENOVACAO_ESPERA_PASSO_MS, até ERP_RENOVACAO_ESPERA_MS. A espera nunca chama o IdP.
+// O `timeout` de cada teste faz uma espera que trava (ex.: chamar o IdP preso) reprovar em vez de pendurar.
+
+/** Roda `fn` com as variáveis de ambiente dadas (`undefined` apaga) e devolve as de antes. */
+async function comAmbiente(vars, fn) {
+  const antes = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]))
+  const aplicar = (v) => { for (const [k, x] of Object.entries(v)) { if (x === undefined) delete process.env[k]; else process.env[k] = x } }
+  aplicar(vars)
+  try { return await fn() } finally { aplicar(antes) }
+}
+
+const ESPERA_CURTA = { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '20' }
+
+/** Leitor que conta as leituras, para provar que a espera relê no passo e não em laço sem pausa. */
+const contandoLeituras = (leitor) => {
+  const l = { leituras: 0, ler: async (k) => { l.leituras++; return leitor.ler(k) } }
+  return l
+}
+
+/** Sessão logada com o token já vencido (a sessão em si continua válida). */
+async function sessaoVencida(n, store, leitor) {
+  const { id } = await logar(n)
+  await store.gravar(id, { ...(await leitor.ler(id)), tokenExpiraEm: Date.now() - 1_000 })
+  return id
+}
+
+const tresStores = [
+  ['memoria', () => { const s = sessaoMemoria(); return { store: s, leitor: s } }],
+  ['arquivo', () => { const dir = mkdtempSync(join(tmpdir(), 'espera-')); return { store: sessaoArquivoDeEscrita({ dir }), leitor: sessaoArquivo({ dir }) } }],
+  ['redis', () => { const r = redisMinimo(); return { store: sessaoRedisDeEscrita({ cliente: r }), leitor: sessaoRedis({ cliente: r }) } }],
+]
+
+for (const [nome, criar] of tresStores) {
+  test(`${nome}: token vencido, 20 renovacoes concorrentes chamam o IdP uma vez e ninguem segue com o token morto`, { timeout: 10_000 }, async () => {
+    await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '2000', ERP_RENOVACAO_ESPERA_PASSO_MS: '20' }, async () => {
+      const { store, leitor } = criar()
+      const idp = idpContador({ atraso: 150 })
+      const n = shellCom(store, idp, leitor)
+      const id = await sessaoVencida(n, store, leitor)
+      const r = await Promise.all(Array.from({ length: 20 }, () => n.sessao.renovarSessao(id)))
+      assert.equal(idp.renovacoes, 1)
+      assert.equal(r.filter((x) => x === 'renovada').length, 1)
+      assert.equal(r.filter((x) => x === 'em-dia').length, 19, `estados: ${r}`)
+      assert.ok(!r.includes('em-andamento'), 'perdedor seguiu com o token vencido')
+      assert.ok((await leitor.ler(id)).tokenExpiraEm > Date.now())
+    })
+  })
+
+  test(`${nome}: token na janela e ainda valido, o perdedor nao espera`, { timeout: 10_000 }, async () => {
+    await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '2000', ERP_RENOVACAO_ESPERA_PASSO_MS: '20' }, async () => {
+      const { store, leitor } = criar()
+      const idp = idpContador({ atraso: 400 })
+      const n = shellCom(store, idp, leitor)
+      const { id } = await logar(n)
+      await store.gravar(id, { ...(await leitor.ler(id)), tokenExpiraEm: Date.now() + 1_000 })
+      const inicio = Date.now()
+      const perdedores = []
+      const r = await Promise.all(Array.from({ length: 20 }, () => n.sessao.renovarSessao(id)
+        .then((x) => { if (x !== 'renovada') perdedores.push(Date.now() - inicio); return x })))
+      assert.equal(idp.renovacoes, 1)
+      assert.equal(r.filter((x) => x === 'em-andamento').length, 19, `estados: ${r}`)
+      assert.ok(perdedores.every((ms) => ms < 200), `perdedor esperou com o token valido: ${perdedores}`)
+    })
+  })
+
+  test(`${nome}: token vencido e IdP com erro transitorio, o perdedor espera o teto e segue; o IdP e chamado uma vez`, { timeout: 10_000 }, async () => {
+    await comAmbiente(ESPERA_CURTA, async () => {
+      const { store, leitor } = criar()
+      const idp = idpContador()
+      idp.renovar = async () => { idp.renovacoes++; await new Promise((r) => setTimeout(r, 30)); throw new Error('IdP fora do ar') }
+      const contador = contandoLeituras(leitor)
+      const n = shellCom(store, idp, contador)
+      const id = await sessaoVencida(n, store, leitor)
+      const vencedor = n.sessao.renovarSessao(id)
+      const perdedores = Array.from({ length: 5 }, () => {
+        const inicio = Date.now()
+        return n.sessao.renovarSessao(id).then((estado) => ({ estado, ms: Date.now() - inicio }))
+      })
+      const leiturasAntes = contador.leituras
+      await assert.rejects(vencedor, /IdP fora do ar/)
+      for (const { estado, ms } of await Promise.all(perdedores)) {
+        assert.equal(estado, 'em-andamento')
+        assert.ok(ms >= 300, `voltou antes do teto: ${ms} ms`)
+        assert.ok(ms <= 300 + 2 * 20 + 25, `passou do teto mais dois passos: ${ms} ms`)
+      }
+      assert.equal(idp.renovacoes, 1, 'a espera chamou o IdP')
+      assert.ok(await leitor.ler(id), 'a sessao foi apagada por um erro transitorio')
+      // releitura no passo, não em laço: 5 perdedores × (300/20 + folga)
+      const releituras = contador.leituras - leiturasAntes
+      assert.ok(releituras <= 5 * (300 / 20 + 4), `releituras demais: ${releituras}`)
+    })
+  })
+
+  test(`${nome}: sessao encerrada durante a espera, o perdedor volta ausente sem esperar o teto`, { timeout: 10_000 }, async () => {
+    await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '2000', ERP_RENOVACAO_ESPERA_PASSO_MS: '20' }, async () => {
+      const { store, leitor } = criar()
+      const base = identidadeDev()
+      let liberar
+      const segurando = new Promise((r) => { liberar = r })
+      let renovacoes = 0
+      const idp = { ...base, renovar: async (s) => { renovacoes++; await segurando; return base.renovar(s) } }
+      const n = shellCom(store, idp, leitor)
+      const id = await sessaoVencida(n, store, leitor)
+      const vencedor = n.sessao.renovarSessao(id)
+      const inicio = Date.now()
+      const perdedor = n.sessao.renovarSessao(id)
+      await new Promise((r) => setTimeout(r, 60))
+      await n.sessao.encerrarSessao(id)
+      assert.equal(await perdedor, 'ausente')
+      assert.ok(Date.now() - inicio < 1_000, 'esperou o teto com a sessao encerrada')
+      liberar()
+      assert.equal(await vencedor, 'ausente')
+      assert.equal(renovacoes, 1)
+    })
+  })
+
+  test(`${nome}: ERP_RENOVACAO_ESPERA_MS=0 desliga a espera (comportamento anterior)`, { timeout: 10_000 }, async () => {
+    await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '0', ERP_RENOVACAO_ESPERA_PASSO_MS: undefined }, async () => {
+      const { store, leitor } = criar()
+      const idp = idpContador({ atraso: 400 })
+      const n = shellCom(store, idp, leitor)
+      const id = await sessaoVencida(n, store, leitor)
+      const inicio = Date.now()
+      const perdedores = []
+      const r = await Promise.all(Array.from({ length: 20 }, () => n.sessao.renovarSessao(id)
+        .then((x) => { if (x !== 'renovada') perdedores.push(Date.now() - inicio); return x })))
+      assert.equal(idp.renovacoes, 1)
+      assert.equal(r.filter((x) => x === 'em-andamento').length, 19, `estados: ${r}`)
+      assert.ok(perdedores.every((ms) => ms < 200), `esperou com a espera desligada: ${perdedores}`)
+    })
+  })
+}
+
+test('a espera rele no passo configurado (ERP_RENOVACAO_ESPERA_PASSO_MS), nao em laco', { timeout: 10_000 }, async () => {
+  await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '100' }, async () => {
+    const store = sessaoMemoria()
+    const idp = idpContador()
+    const contador = contandoLeituras(store)
+    const n = shellCom(store, idp, contador)
+    const id = await sessaoVencida(n, store, store)
+    assert.ok(await store.adquirirLockRenovacao(id, 60_000), 'lock de outro processo')
+    const antes = contador.leituras
+    const inicio = Date.now()
+    assert.equal(await n.sessao.renovarSessao(id), 'em-andamento')
+    const ms = Date.now() - inicio
+    const releituras = contador.leituras - antes - 1   // a primeira é a leitura de antes do lock
+    assert.ok(ms >= 300 && ms <= 300 + 2 * 100 + 25, `tempo fora do teto: ${ms} ms`)
+    assert.ok(releituras >= 2 && releituras <= 4, `releituras com passo de 100 ms em 300 ms: ${releituras}`)
+    assert.equal(idp.renovacoes, 0, 'o perdedor chamou o IdP')
+  })
+})
+
+test('ERP_RENOVACAO_ESPERA_MS e ERP_RENOVACAO_ESPERA_PASSO_MS: padrao, teto e recusa na criacao', { timeout: 10_000 }, async () => {
+  const store = sessaoMemoria()
+  const criar = () => shellCom(store, identidadeDev())
+  const limpo = { ERP_RENOVACAO_ESPERA_MS: undefined, ERP_RENOVACAO_ESPERA_PASSO_MS: undefined, ERP_RENOVACAO_LOCK_S: undefined }
+  // aceitos
+  for (const vars of [
+    {}, { ERP_RENOVACAO_ESPERA_MS: '0' }, { ERP_RENOVACAO_ESPERA_MS: '14999' }, { ERP_RENOVACAO_ESPERA_MS: '51' },
+    { ERP_RENOVACAO_LOCK_S: '3' }, { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '10' },
+    { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '299' },
+  ]) await comAmbiente({ ...limpo, ...vars }, async () => assert.doesNotThrow(criar, JSON.stringify(vars)))
+  // recusados, com o nome da variável culpada
+  for (const [vars, culpada] of [
+    [{ ERP_RENOVACAO_ESPERA_MS: '-1' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '1.5' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: 'dois' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: ' ' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    // teto: menor que ERP_RENOVACAO_LOCK_S × 1000 (padrão 15 s)
+    [{ ERP_RENOVACAO_ESPERA_MS: '15000' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '5000', ERP_RENOVACAO_LOCK_S: '5' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    // o padrão (2000) também respeita o teto: com lock de 2 s não cabe
+    [{ ERP_RENOVACAO_LOCK_S: '2' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '9' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+    [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '0' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+    [{ ERP_RENOVACAO_ESPERA_PASSO_MS: 'x' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '300' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+    // o padrão do passo (50) tem de ser menor que a espera
+    [{ ERP_RENOVACAO_ESPERA_MS: '50' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+  ]) await comAmbiente({ ...limpo, ...vars }, async () => assert.throws(criar, new RegExp(culpada), JSON.stringify(vars)))
+})
+
+test('padroes da espera no fonte: 2000 ms e passo de 50 ms (docs/CONFIGURACAO.md §1)', { timeout: 10_000 }, async () => {
+  const { readFileSync } = await import('node:fs')
+  const fonte = readFileSync(new URL('../src/fabricas/criarNucleo.ts', import.meta.url), 'utf8')
+  assert.match(fonte, /ERP_RENOVACAO_ESPERA_MS, 2_000, 'ERP_RENOVACAO_ESPERA_MS'/)
+  assert.match(fonte, /ERP_RENOVACAO_ESPERA_PASSO_MS, 50, 'ERP_RENOVACAO_ESPERA_PASSO_MS', 10/)
+})

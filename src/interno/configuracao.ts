@@ -19,6 +19,21 @@ export function lerNumeroPositivo(valor: string | undefined, padrao: number, nom
   return n
 }
 
+/**
+ * Como `lerNumeroPositivo`, com piso explícito: serve quando `0` tem significado (ex.: "desligado").
+ * Só aceita dígitos: sinal, fração, expoente e espaço são recusados, nunca arredondados para um valor
+ * que ninguém escolheu (`' '` viraria `0` com `Number`).
+ */
+export function lerInteiroEntre(valor: string | undefined, padrao: number, nome: string, minimo: number, maximo: number): number {
+  if (valor === undefined || valor === '') return padrao
+  const n = /^\d+$/.test(valor) ? Number(valor) : NaN
+  if (!Number.isSafeInteger(n) || n < minimo) {
+    throw new Error(`configuracao invalida: ${nome} deve ser inteiro de no minimo ${minimo}, recebeu "${valor}"`)
+  }
+  if (n > maximo) throw new Error(`configuracao invalida: ${nome} deve ser no maximo ${maximo}, recebeu "${valor}"`)
+  return n
+}
+
 /** Timeout de uma chamada de saída do núcleo, em ms (`ERP_DESTINO_TIMEOUT_MS`, docs/CONFIGURACAO.md §2): domínio e IdP. */
 export const lerTimeoutDeDestinoMs = (): number =>
   lerNumeroPositivo(process.env.ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000)
