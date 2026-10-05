@@ -243,11 +243,23 @@ test('o shell tem iniciarLogin, concluirLogin, renovarSessao e encerrarSessao, e
     ['atual', 'concluirLogin', 'encerrarSessao', 'exigir', 'iniciarLogin', 'renovarSessao'])
 })
 
-test('iniciarLogin devolve so url e id opaco: state, nonce e code_verifier ficam no store', async () => {
-  const n = shellCom(sessaoMemoria(), identidadeDev())
+test('iniciarLogin devolve so url, id opaco e expiraEm: state, nonce e code_verifier ficam no store', async () => {
+  const store = sessaoMemoria()
+  const n = shellCom(store, identidadeDev())
   const r = await n.sessao.iniciarLogin('/zona1')
-  assert.deepEqual(Object.keys(r).sort(), ['idTransacao', 'url'])
+  assert.deepEqual(Object.keys(r).sort(), ['expiraEm', 'idTransacao', 'url'])
   assert.equal(typeof r.idTransacao, 'string')
+  // D20, item 5: o fim da transação vem do núcleo, e o shell não repete padrão e teto de ERP_LOGIN_TRANSACAO_S
+  assert.equal(r.expiraEm, (await store.consumirTransacao(r.idTransacao)).expiraEm)
+})
+
+test('iniciarLogin: expiraEm segue ERP_LOGIN_TRANSACAO_S (padrao 600 s)', async () => {
+  for (const [valor, ms] of [[undefined, 600_000], ['90', 90_000]]) {
+    await comAmbiente({ ERP_LOGIN_TRANSACAO_S: valor }, async () => {
+      const { expiraEm } = await shellCom(sessaoMemoria(), identidadeDev()).sessao.iniciarLogin('/')
+      assert.ok(Math.abs(expiraEm - Date.now() - ms) < 2_000, `ERP_LOGIN_TRANSACAO_S=${valor}: expiraEm=${expiraEm}`)
+    })
+  }
 })
 
 test('concluirLogin grava a sessao, devolve so id e destino, e o token nao chega a quem chama', async () => {
@@ -388,7 +400,7 @@ test('renovarSessao: erro transitorio do IdP lanca, mantem a sessao e segura o l
 })
 
 test('a janela e o lock de renovacao vem do ambiente (ERP_RENOVACAO_JANELA_S, ERP_RENOVACAO_LOCK_S)', async () => {
-  const antes = { j: process.env.ERP_RENOVACAO_JANELA_S, l: process.env.ERP_RENOVACAO_LOCK_S }
+  const antes = { j: process.env.ERP_RENOVACAO_JANELA_S, l: process.env.ERP_RENOVACAO_LOCK_S, t: process.env.ERP_DESTINO_TIMEOUT_MS }
   try {
     process.env.ERP_RENOVACAO_JANELA_S = '600'
     const store = sessaoMemoria()
@@ -402,6 +414,7 @@ test('a janela e o lock de renovacao vem do ambiente (ERP_RENOVACAO_JANELA_S, ER
     let ttl
     const espiao = { ...store, adquirirLockRenovacao: async (k, ms) => { ttl = ms; return store.adquirirLockRenovacao(k, ms) } }
     process.env.ERP_RENOVACAO_LOCK_S = '7'
+    process.env.ERP_DESTINO_TIMEOUT_MS = '3000'   // o lock tem de passar de 2 x o timeout (D20)
     await espiao.gravar(id, { ...(await store.ler(id)), tokenExpiraEm: Date.now() + 1_000 })
     await shellCom(espiao, idp, store).sessao.renovarSessao(id)
     assert.equal(ttl, 7_000)
@@ -412,9 +425,31 @@ test('a janela e o lock de renovacao vem do ambiente (ERP_RENOVACAO_JANELA_S, ER
       assert.throws(() => shellCom(store, idp), new RegExp(nome), `${nome}=${ruim}`)
     }
   } finally {
-    for (const [k, v] of [['ERP_RENOVACAO_JANELA_S', antes.j], ['ERP_RENOVACAO_LOCK_S', antes.l]]) {
+    for (const [k, v] of [['ERP_RENOVACAO_JANELA_S', antes.j], ['ERP_RENOVACAO_LOCK_S', antes.l], ['ERP_DESTINO_TIMEOUT_MS', antes.t]]) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v
     }
+  }
+})
+
+// D20, item 1: com o lock menor que duas idas ao IdP, ele vence com a primeira renovação ainda em curso, outra
+// requisição ganha o lock e gasta o mesmo refresh token; com rotação, o IdP revoga a sessão (CONFIGURACAO.md §1).
+test('ERP_RENOVACAO_LOCK_S tem de ser maior que 2 x ERP_DESTINO_TIMEOUT_MS / 1000: recusa na criacao', async () => {
+  const criar = () => shellCom(sessaoMemoria(), identidadeDev())
+  const limpo = { ERP_RENOVACAO_LOCK_S: undefined, ERP_DESTINO_TIMEOUT_MS: undefined, ERP_RENOVACAO_ESPERA_MS: undefined, ERP_RENOVACAO_ESPERA_PASSO_MS: undefined }
+  for (const vars of [
+    {},                                                             // padrões: 15 s > 2 x 5 s
+    { ERP_RENOVACAO_LOCK_S: '11' },                                 // 11 s > 10 s
+    { ERP_RENOVACAO_LOCK_S: '5', ERP_DESTINO_TIMEOUT_MS: '2000' },  // task verificar:oidc
+    { ERP_RENOVACAO_LOCK_S: '3', ERP_DESTINO_TIMEOUT_MS: '1499' },
+  ]) await comAmbiente({ ...limpo, ...vars }, async () => assert.doesNotThrow(criar, JSON.stringify(vars)))
+  for (const vars of [
+    { ERP_RENOVACAO_LOCK_S: '10' },                                 // igual ao dobro não basta
+    { ERP_RENOVACAO_LOCK_S: '5' },                                  // lock da verificação OIDC com o timeout padrão
+    { ERP_RENOVACAO_LOCK_S: '15', ERP_DESTINO_TIMEOUT_MS: '7500' },
+    { ERP_RENOVACAO_LOCK_S: '3', ERP_DESTINO_TIMEOUT_MS: '1500' },
+  ]) {
+    await comAmbiente({ ...limpo, ...vars }, async () =>
+      assert.throws(criar, /ERP_RENOVACAO_LOCK_S.*ERP_DESTINO_TIMEOUT_MS/, JSON.stringify(vars)))
   }
 })
 
@@ -635,11 +670,13 @@ test('a espera rele no passo configurado (ERP_RENOVACAO_ESPERA_PASSO_MS), nao em
 test('ERP_RENOVACAO_ESPERA_MS e ERP_RENOVACAO_ESPERA_PASSO_MS: padrao, teto e recusa na criacao', { timeout: 10_000 }, async () => {
   const store = sessaoMemoria()
   const criar = () => shellCom(store, identidadeDev())
-  const limpo = { ERP_RENOVACAO_ESPERA_MS: undefined, ERP_RENOVACAO_ESPERA_PASSO_MS: undefined, ERP_RENOVACAO_LOCK_S: undefined }
+  const limpo = { ERP_RENOVACAO_ESPERA_MS: undefined, ERP_RENOVACAO_ESPERA_PASSO_MS: undefined, ERP_RENOVACAO_LOCK_S: undefined, ERP_DESTINO_TIMEOUT_MS: undefined }
+  // lock pequeno pede timeout pequeno (D20: lock > 2 x ERP_DESTINO_TIMEOUT_MS), para a culpada ser a espera
+  const lockDe = (s) => ({ ERP_RENOVACAO_LOCK_S: s, ERP_DESTINO_TIMEOUT_MS: String(s * 400) })
   // aceitos
   for (const vars of [
     {}, { ERP_RENOVACAO_ESPERA_MS: '0' }, { ERP_RENOVACAO_ESPERA_MS: '14999' }, { ERP_RENOVACAO_ESPERA_MS: '51' },
-    { ERP_RENOVACAO_LOCK_S: '3' }, { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '10' },
+    lockDe(3), { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '10' },
     { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '299' },
   ]) await comAmbiente({ ...limpo, ...vars }, async () => assert.doesNotThrow(criar, JSON.stringify(vars)))
   // recusados, com o nome da variável culpada
@@ -648,11 +685,17 @@ test('ERP_RENOVACAO_ESPERA_MS e ERP_RENOVACAO_ESPERA_PASSO_MS: padrao, teto e re
     [{ ERP_RENOVACAO_ESPERA_MS: '1.5' }, 'ERP_RENOVACAO_ESPERA_MS'],
     [{ ERP_RENOVACAO_ESPERA_MS: 'dois' }, 'ERP_RENOVACAO_ESPERA_MS'],
     [{ ERP_RENOVACAO_ESPERA_MS: ' ' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '1e3' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '0x10' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '+5' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '1e3' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+    [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '0x10' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
+    [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '+5' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
     // teto: menor que ERP_RENOVACAO_LOCK_S × 1000 (padrão 15 s)
     [{ ERP_RENOVACAO_ESPERA_MS: '15000' }, 'ERP_RENOVACAO_ESPERA_MS'],
-    [{ ERP_RENOVACAO_ESPERA_MS: '5000', ERP_RENOVACAO_LOCK_S: '5' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [{ ERP_RENOVACAO_ESPERA_MS: '5000', ...lockDe(5) }, 'ERP_RENOVACAO_ESPERA_MS'],
     // o padrão (2000) também respeita o teto: com lock de 2 s não cabe
-    [{ ERP_RENOVACAO_LOCK_S: '2' }, 'ERP_RENOVACAO_ESPERA_MS'],
+    [lockDe(2), 'ERP_RENOVACAO_ESPERA_MS'],
     [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '9' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
     [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '0' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
     [{ ERP_RENOVACAO_ESPERA_PASSO_MS: 'x' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
@@ -667,4 +710,106 @@ test('padroes da espera no fonte: 2000 ms e passo de 50 ms (docs/CONFIGURACAO.md
   const fonte = readFileSync(new URL('../src/fabricas/criarNucleo.ts', import.meta.url), 'utf8')
   assert.match(fonte, /ERP_RENOVACAO_ESPERA_MS, 2_000, 'ERP_RENOVACAO_ESPERA_MS'/)
   assert.match(fonte, /ERP_RENOVACAO_ESPERA_PASSO_MS, 50, 'ERP_RENOVACAO_ESPERA_PASSO_MS', 10/)
+})
+
+// Revisão da Task 1, menor 5: o vencedor recebe `revogada` (remove a sessão); o perdedor, que esperava com o
+// token vencido, volta `ausente` na releitura seguinte, sem esperar o teto e sem chamar o IdP.
+for (const [nome, criar] of tresStores) {
+  test(`${nome}: o vencedor recebe revogada e o perdedor, que estava esperando, volta ausente`, { timeout: 10_000 }, async () => {
+    await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '2000', ERP_RENOVACAO_ESPERA_PASSO_MS: '20' }, async () => {
+      const { store, leitor } = criar()
+      const idp = idpContador({ atraso: 150, resultado: { status: 'revogada' } })
+      const n = shellCom(store, idp, leitor)
+      const id = await sessaoVencida(n, store, leitor)
+      const vencedor = n.sessao.renovarSessao(id)
+      const inicio = Date.now()
+      const perdedor = n.sessao.renovarSessao(id)
+      assert.equal(await vencedor, 'revogada')
+      assert.equal(await perdedor, 'ausente')
+      assert.ok(Date.now() - inicio < 1_000, 'o perdedor esperou o teto com a sessao revogada')
+      assert.equal(idp.renovacoes, 1)
+      assert.equal(await leitor.ler(id), null)
+    })
+  })
+}
+
+// --- D20, item 2: ERP_RENOVACAO_JANELA_S menor que metade da vida do token, conferido por sessão ----------------
+// O núcleo só conhece a vida do token depois de recebê-lo. Ao gravar a sessão (login ou renovação), a fábrica
+// mede a vida; violada a regra, registra no servidor uma vez por sessão, só `{ codigo, supportId }`, e usa
+// metade da vida como janela daquela sessão: com a janela maior que a vida, o token novo já nasceria dentro
+// dela e a sessão renovaria a cada vencimento do lock.
+
+const shellRegistrando = (store, identidade) => {
+  const falhas = []
+  const n = criarNucleoDoShell({
+    app: 'shell', sessao: store, destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
+    lerCookieDeSessao: async () => undefined,
+    escrita: { store, identidade },
+    registrarFalha: (f) => falhas.push(f),
+  })
+  return { n, falhas }
+}
+
+test('janela >= vida do token: registra uma vez por sessao, so codigo e supportId, e nao renova em laco', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const store = sessaoMemoria()
+    const idp = idpContador()
+    const { n, falhas } = shellRegistrando(store, idp)
+    const { id } = await logar(n)
+    assert.equal(falhas.length, 1, 'a violacao nao foi registrada no login')
+    assert.deepEqual(Object.keys(falhas[0]).sort(), ['codigo', 'supportId'])
+    assert.equal(falhas[0].codigo, 'ERRO_INTERNO')
+    assert.match(falhas[0].supportId, /^[0-9a-f-]{36}$/)
+    const s = await store.ler(id)
+    for (const segredo of [s.accessToken, s.refreshToken]) assert.ok(!JSON.stringify(falhas).includes(segredo), 'token no registro')
+    // logo depois do login o token tem 60 s, dentro da janela de 60 s: sem a regra, renovaria agora e a cada lock
+    assert.equal(await n.sessao.renovarSessao(id), 'em-dia')
+    assert.equal(idp.renovacoes, 0, 'renovou um token recem-emitido')
+    // na metade da vida, renova; a sessão continua com a mesma violação e não registra de novo
+    await store.gravar(id, { ...(await store.ler(id)), tokenExpiraEm: Date.now() + 29_000 })
+    assert.equal(await n.sessao.renovarSessao(id), 'renovada')
+    assert.equal(idp.renovacoes, 1)
+    assert.equal(await n.sessao.renovarSessao(id), 'em-dia', 'o token renovado ja nasceu dentro da janela')
+    assert.equal(falhas.length, 1, 'registrou a mesma sessao de novo')
+    // outra sessão com a mesma violação registra a sua vez
+    await logar(n, 'bruno')
+    assert.equal(falhas.length, 2)
+  })
+})
+
+test('janela < metade da vida do token: nada a registrar, e a janela configurada vale', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '300', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const store = sessaoMemoria()
+    const idp = idpContador()
+    const { n, falhas } = shellRegistrando(store, idp)
+    const { id } = await logar(n)
+    await store.gravar(id, { ...(await store.ler(id)), tokenExpiraEm: Date.now() + 59_000 })
+    assert.equal(await n.sessao.renovarSessao(id), 'renovada')
+    assert.deepEqual(falhas, [])
+  })
+})
+
+test('token cortado pelo fim da sessao nao conta como vida curta: nada a registrar', async () => {
+  // a sessão acaba antes do token (inatividade de 50 s, token de 300 s): tokenExpiraEm = expiraEm
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '300', ERP_SESSAO_INATIVIDADE_S: '50', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const { n, falhas } = shellRegistrando(sessaoMemoria(), idpContador())
+    await logar(n)
+    assert.deepEqual(falhas, [])
+  })
+})
+
+test('registro padrao da violacao: uma linha no console do servidor so com codigo e supportId', async () => {
+  await comAmbiente({ ERP_TOKEN_VIDA_S: '60', ERP_RENOVACAO_JANELA_S: '60' }, async () => {
+    const store = sessaoMemoria()
+    const linhas = []
+    const original = console.error
+    console.error = (...a) => linhas.push(a.join(' '))
+    try {
+      const { id } = await logar(shellCom(store, identidadeDev()))
+      const s = await store.ler(id)
+      assert.equal(linhas.length, 1, `linhas: ${linhas}`)
+      assert.match(linhas[0], /codigo=ERRO_INTERNO supportId=[0-9a-f-]{36}$/)
+      for (const segredo of [s.accessToken, s.refreshToken, 'ana']) assert.ok(!linhas[0].includes(segredo), `vazou ${segredo}`)
+    } finally { console.error = original }
+  })
 })

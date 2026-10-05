@@ -90,7 +90,8 @@ function ehTransitorio(e: unknown): boolean {
  */
 export function identidadeOidc(config: ConfigIdentidadeOidc): ProvedorDeIdentidade {
   const emissor = validarUrl('emissor', config.emissor, true)
-  const urlRetorno = validarUrl('urlRetorno', config.urlRetorno).href
+  // o IdP compara a redirect_uri inteira com a registrada; query ou fragmento aqui é erro de configuração
+  const urlRetorno = validarUrl('urlRetorno', config.urlRetorno, true).href
   const urlPosLogout = config.urlPosLogout === undefined ? undefined : validarUrl('urlPosLogout', config.urlPosLogout).href
   if (!texto(config.clienteId)) recusar('clienteId', 'e obrigatorio')
   if (!texto(config.clienteSegredo)) recusar('clienteSegredo', 'e obrigatorio')

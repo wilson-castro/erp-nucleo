@@ -496,9 +496,15 @@ test('configuracao invalida e erro na criacao', () => {
     'sem cliente': { clienteId: '' },
     'sem segredo': { clienteSegredo: '' },
     'retorno relativo': { urlRetorno: '/api/auth/retorno' },
+    // D20, item 3: o IdP compara a redirect_uri inteira; query ou fragmento é erro de configuração
+    'retorno com query': { urlRetorno: `${URL_RETORNO}?x=1` },
+    'retorno com fragmento': { urlRetorno: `${URL_RETORNO}#x` },
   }
   for (const [nome, ajuste] of Object.entries(ruins)) {
     assert.throws(() => identidadeOidc({ ...base, ...ajuste }), Error, nome)
+  }
+  for (const sufixo of ['?x=1', '#x']) {
+    assert.throws(() => identidadeOidc({ ...base, urlRetorno: URL_RETORNO + sufixo }), /urlRetorno nao pode ter query nem fragmento/, sufixo)
   }
   // a mensagem de erro de configuração nunca carrega o segredo
   try { identidadeOidc({ ...base, emissor: 'idp' }) } catch (e) { assert.ok(!e.message.includes(CLIENTE.clienteSegredo)) }

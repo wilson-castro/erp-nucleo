@@ -10,6 +10,12 @@ export type SessaoArmazenada = {
   accessToken: string
   expiraEm: number
   tokenExpiraEm?: number
+  /**
+   * Vida do token em ms, medida pelo shell ao gravar (login ou renovação). Limita a janela de renovação
+   * desta sessão a metade dela quando `ERP_RENOVACAO_JANELA_S` é grande demais (D20). Ausente quando o
+   * token é cortado pelo fim da sessão, ou em sessão gravada antes dela: vale a janela configurada.
+   */
+  tokenVidaMs?: number
   refreshToken?: string
   idToken?: string
 }

@@ -26,9 +26,15 @@ export type ResultadoRenovacao =
  * `criarNucleoDoShell`, que guarda transação e sessão sem devolver token a quem chama.
  */
 export interface ProvedorDeIdentidade {
-  /** Cria a transação e a URL para onde mandar o navegador. */
+  /**
+   * Cria a transação e a URL para onde mandar o navegador. Erro transitório (IdP fora, discovery
+   * falhando) **lança**: quem chama responde erro, sem transação gravada.
+   */
   iniciar(destino?: string): Promise<{ url: string; transacao: TransacaoDeLogin }>
-  /** Valida o retorno contra a transação (`state`, `nonce`, validade). Recusado: `null`. */
+  /**
+   * Valida o retorno contra a transação (`state`, `nonce`, validade). Recusado: `null`. Erro
+   * transitório (rede, 5xx do IdP) **lança**: não é recusa, e quem chama responde erro.
+   */
   concluir(parametros: Record<string, string>, transacao: TransacaoDeLogin): Promise<SessaoArmazenada | null>
   /** Erro transitório (rede, 5xx) **lança**: quem chama mantém a sessão e tenta depois. */
   renovar(sessao: SessaoArmazenada): Promise<ResultadoRenovacao>

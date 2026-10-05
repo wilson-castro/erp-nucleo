@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { lerNumeroPositivo } from '../dist/interno/configuracao.js'
+import { lerInteiroEntre, lerNumeroPositivo } from '../dist/interno/configuracao.js'
 
 test('ausente ou vazio: o padrao', () => {
   assert.equal(lerNumeroPositivo(undefined, 5000, 'X'), 5000)
@@ -24,4 +24,15 @@ test('os timeouts do nucleo tem padrao e teto (docs/CONFIGURACAO.md)', async () 
   assert.match(fonte('interno/configuracao.ts'), /ERP_DESTINO_TIMEOUT_MS, 5_000, 'ERP_DESTINO_TIMEOUT_MS', 60_000\)/)
   assert.match(fonte('fabricas/fragmento.ts'), /ERP_FRAGMENTO_TIMEOUT_MS, 2_000, 'ERP_FRAGMENTO_TIMEOUT_MS', 30_000\)/)
   assert.match(fonte('adaptadores/identidade-dev.ts'), /ERP_TOKEN_VIDA_S, 300, 'ERP_TOKEN_VIDA_S', 3_600\)/)
+})
+
+// Revisão da Task 1 D19-B, menor 3: acima do inteiro seguro é "no máximo", não "no mínimo".
+test('lerInteiroEntre: valor acima do inteiro seguro e recusado como acima do teto', () => {
+  for (const v of ['9007199254740992', '99999999999999999999']) {
+    assert.throws(() => lerInteiroEntre(v, 0, 'ERP_X_MS', 0, 300_000), /ERP_X_MS deve ser no maximo 300000/, v)
+  }
+  for (const v of ['-1', '1e3', '0x10', '+5', ' 5', '5\n', '1.0']) {
+    assert.throws(() => lerInteiroEntre(v, 0, 'ERP_X_MS', 0, 300_000), /ERP_X_MS deve ser inteiro de no minimo 0/, JSON.stringify(v))
+  }
+  assert.equal(lerInteiroEntre('300000', 0, 'ERP_X_MS', 0, 300_000), 300_000)
 })

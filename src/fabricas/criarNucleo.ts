@@ -1,7 +1,7 @@
 import 'server-only'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as pausa } from 'node:timers/promises'
-import { ehFuncionalidade, type AcessoEfetivo } from '@erp/contratos'
+import { ehFuncionalidade, type AcessoEfetivo, type CodigoErro } from '@erp/contratos'
 import type { LeitorDeSessao, EscritorDeSessao, Sessao, SessaoArmazenada } from '../portas/sessao.js'
 import type { ProvedorDeIdentidade } from '../portas/identidade.js'
 import type { ClienteDeDestino, RegistroDeDestinos } from '../portas/destinos.js'
@@ -9,7 +9,7 @@ import type { FabricaDeAcesso } from '../portas/acesso.js'
 import { criarTransporte } from '../interno/destinos.js'
 import { NaoEncontrado, SessaoInvalida } from '../interno/erros.js'
 import { ID_MODULO } from '../interno/acesso-v2.js'
-import { lerInteiroEntre, lerNumeroPositivo } from '../interno/configuracao.js'
+import { lerInteiroEntre, lerNumeroPositivo, lerTimeoutDeDestinoMs } from '../interno/configuracao.js'
 
 export type ConfigDoNucleo = {
   /** Nome da aplicação, enviado ao domínio no cabeçalho `x-erp-chamador`. */
@@ -28,9 +28,17 @@ export type ConfigDoNucleo = {
   lerTraceparent?: () => Promise<string | undefined>
 }
 
+/** Falha registrada no servidor: só código e `supportId`, nunca token nem dado da pessoa (invariante 12). */
+export type FalhaDoNucleo = { codigo: CodigoErro; supportId: string }
+
 /** Só o shell passa `escrita`. É o que faz dele o único escritor da sessão (N3). */
 export type ConfigDoNucleoDoShell = ConfigDoNucleo & {
   escrita: { store: EscritorDeSessao; identidade: ProvedorDeIdentidade }
+  /**
+   * Onde registrar falha de configuração vista numa sessão (hoje, `ERP_RENOVACAO_JANELA_S` maior ou igual
+   * a metade da vida do token). Ausente: uma linha em `console.error`.
+   */
+  registrarFalha?: (falha: FalhaDoNucleo) => void
 }
 
 export type Nucleo = {
@@ -71,8 +79,11 @@ export type EstadoDaRenovacao = 'ausente' | 'em-dia' | 'em-andamento' | 'renovad
  */
 export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
   sessao: Nucleo['sessao'] & {
-    /** Cria e guarda a transação de login. `idTransacao` vai no cookie `__Host-erp-login`. */
-    iniciarLogin(destino?: string): Promise<{ url: string; idTransacao: string }>
+    /**
+     * Cria e guarda a transação de login. `idTransacao` vai no cookie `__Host-erp-login`; `expiraEm`
+     * (ms desde a época, `ERP_LOGIN_TRANSACAO_S`) é o fim da transação, para o cookie viver o mesmo.
+     */
+    iniciarLogin(destino?: string): Promise<{ url: string; idTransacao: string; expiraEm: number }>
     /**
      * Consome a transação (uso único, mesmo se o retorno for recusado), conclui no IdP, cunha
      * um id de sessão NOVO e grava. Devolve só o id e o destino guardado na transação.
@@ -165,11 +176,19 @@ export function criarNucleo(cfg: ConfigDoNucleo): Nucleo {
 /**
  * O núcleo do shell, único escritor da sessão (N3). Publicado só em `@erp/nucleo/shell`.
  * Lê e valida na criação `ERP_RENOVACAO_JANELA_S`, `ERP_RENOVACAO_LOCK_S`, `ERP_RENOVACAO_ESPERA_MS`
- * e `ERP_RENOVACAO_ESPERA_PASSO_MS` (docs/CONFIGURACAO.md §1).
+ * e `ERP_RENOVACAO_ESPERA_PASSO_MS` (docs/CONFIGURACAO.md §1), e o lock contra `ERP_DESTINO_TIMEOUT_MS`.
+ * A janela contra a vida do token só pode ser conferida por sessão, ao receber o token (D20).
  */
 export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
   const janelaMs = lerNumeroPositivo(process.env.ERP_RENOVACAO_JANELA_S, 60, 'ERP_RENOVACAO_JANELA_S', 3_600) * 1_000
   const lockMs = lerNumeroPositivo(process.env.ERP_RENOVACAO_LOCK_S, 15, 'ERP_RENOVACAO_LOCK_S', 300) * 1_000
+  // D20: o lock tem de durar mais que duas idas ao IdP (discovery e token, cada uma até o timeout). Se vence
+  // com a renovação em curso, outra requisição ganha o lock e gasta o mesmo refresh token: com rotação e
+  // detecção de reuso, o IdP revoga a sessão.
+  const timeoutMs = lerTimeoutDeDestinoMs()
+  if (lockMs <= 2 * timeoutMs) {
+    throw new Error(`configuracao invalida: ERP_RENOVACAO_LOCK_S x 1000 (${lockMs}) deve ser maior que 2 x ERP_DESTINO_TIMEOUT_MS (${2 * timeoutMs})`)
+  }
   // D19-B: espera de quem perde o lock com o token vencido; `0` desliga. Menor que o lock: depois
   // dele, outra requisição pode ganhar o lock, e esperar mais não serve a ninguém.
   const esperaMs = lerInteiroEntre(process.env.ERP_RENOVACAO_ESPERA_MS, 2_000, 'ERP_RENOVACAO_ESPERA_MS', 0, 300_000)
@@ -182,16 +201,48 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
   }
   const nucleo = criarNucleo(cfg)
   const { store, identidade } = cfg.escrita
+  const registrarFalha = cfg.registrarFalha ?? ((f: FalhaDoNucleo) =>
+    console.error(`[renovacao] ERP_RENOVACAO_JANELA_S >= metade da vida do token: codigo=${f.codigo} supportId=${f.supportId}`))
 
   const valida = async (id: string) => {
     const s = await cfg.sessao.ler(id)
     return s && Date.now() < s.expiraEm ? s : null
   }
+  // D20: a janela tem de ser menor que metade da vida do token. Maior que a vida, o token novo já nasce dentro
+  // dela e a sessão renova a cada vencimento do lock. A vida só se conhece com o token na mão: quando a regra
+  // falha numa sessão, a janela dela vira metade da vida.
+  const vidaConhecida = (s: SessaoArmazenada) =>
+    typeof s.tokenVidaMs === 'number' && Number.isFinite(s.tokenVidaMs) && s.tokenVidaMs > 0 ? s.tokenVidaMs : undefined
+  const janelaDe = (s: SessaoArmazenada) => {
+    const vida = vidaConhecida(s)
+    return vida === undefined ? janelaMs : Math.min(janelaMs, vida / 2)
+  }
+  const violaJanela = (s: SessaoArmazenada | null) => {
+    const vida = s ? vidaConhecida(s) : undefined
+    return vida !== undefined && janelaMs * 2 >= vida
+  }
+  /**
+   * Mede a vida do token recém-recebido e a guarda na sessão. Token cortado pelo fim da sessão
+   * (`tokenExpiraEm === expiraEm`) não mede a vida do token: fica sem. Registra a violação uma vez por
+   * sessão: no login, ou na renovação que a fez aparecer (`anterior` sem ela).
+   */
+  const comVidaDoToken = (s: SessaoArmazenada, anterior: SessaoArmazenada | null): SessaoArmazenada => {
+    const { tokenVidaMs: _, ...resto } = s
+    const medida: SessaoArmazenada = s.tokenExpiraEm !== undefined && s.tokenExpiraEm < s.expiraEm
+      ? { ...resto, tokenVidaMs: s.tokenExpiraEm - Date.now() }
+      : resto
+    if (violaJanela(medida) && !violaJanela(anterior)) registrarFalha({ codigo: 'ERRO_INTERNO', supportId: randomUUID() })
+    return medida
+  }
+
   // sem `tokenExpiraEm` não há o que antecipar: o token vale a sessão inteira
-  const emDia = (s: SessaoArmazenada) => s.tokenExpiraEm === undefined || s.tokenExpiraEm - Date.now() > janelaMs
+  const emDia = (s: SessaoArmazenada) => s.tokenExpiraEm === undefined || s.tokenExpiraEm - Date.now() > janelaDe(s)
   const tokenVale = (s: SessaoArmazenada) => s.tokenExpiraEm === undefined || Date.now() < s.tokenExpiraEm
 
   // Só relê o store, nunca o IdP. Volta no máximo um passo depois do teto (a última pausa é cortada nele).
+  // Não compara `s.sub` com o `sub` de antes: nenhum caminho troca a pessoa sob o mesmo id. `concluirLogin`
+  // cunha um id novo a cada login, e a renovação só regrava com o mesmo `sub` (outro sujeito remove a sessão,
+  // e a releitura seguinte volta `ausente`).
   const esperarRenovacao = async (id: string): Promise<EstadoDaRenovacao> => {
     const limite = Date.now() + esperaMs
     while (Date.now() < limite) {
@@ -211,7 +262,7 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
       async iniciarLogin(destino) {
         const { url, transacao } = await identidade.iniciar(destino)
         await store.gravarTransacao(transacao)
-        return { url, idTransacao: transacao.id }
+        return { url, idTransacao: transacao.id, expiraEm: transacao.expiraEm }
       },
 
       async concluirLogin(idTransacao, parametros) {
@@ -222,7 +273,7 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
         if (!s) return null
         // id novo a cada login: um id que existisse antes do login não vira sessão autenticada
         const id = randomUUID()
-        await store.gravar(id, s)
+        await store.gravar(id, comVidaDoToken(s, null))
         return { id, destino: transacao.destino }
       },
 
@@ -244,7 +295,7 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
         const r = await identidade.renovar(s)
         if (r.status === 'renovada' && r.sessao.sub === s.sub) {
           // regravar, não gravar: se a sessão foi encerrada durante a ida ao IdP, ela não volta
-          return (await store.regravar(id, r.sessao)) ? 'renovada' : 'ausente'
+          return (await store.regravar(id, comVidaDoToken(r.sessao, s))) ? 'renovada' : 'ausente'
         }
         // revogada, ou o IdP devolveu outra pessoa: a sessão não continua com nenhuma das duas
         await store.remover(id)

@@ -27,10 +27,11 @@ export function lerNumeroPositivo(valor: string | undefined, padrao: number, nom
 export function lerInteiroEntre(valor: string | undefined, padrao: number, nome: string, minimo: number, maximo: number): number {
   if (valor === undefined || valor === '') return padrao
   const n = /^\d+$/.test(valor) ? Number(valor) : NaN
-  if (!Number.isSafeInteger(n) || n < minimo) {
+  if (Number.isNaN(n) || n < minimo) {
     throw new Error(`configuracao invalida: ${nome} deve ser inteiro de no minimo ${minimo}, recebeu "${valor}"`)
   }
-  if (n > maximo) throw new Error(`configuracao invalida: ${nome} deve ser no maximo ${maximo}, recebeu "${valor}"`)
+  // só dígitos e acima do inteiro seguro também é acima do teto
+  if (!Number.isSafeInteger(n) || n > maximo) throw new Error(`configuracao invalida: ${nome} deve ser no maximo ${maximo}, recebeu "${valor}"`)
   return n
 }
 
