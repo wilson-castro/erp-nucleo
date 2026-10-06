@@ -678,6 +678,9 @@ test('ERP_RENOVACAO_ESPERA_MS e ERP_RENOVACAO_ESPERA_PASSO_MS: padrao, teto e re
     {}, { ERP_RENOVACAO_ESPERA_MS: '0' }, { ERP_RENOVACAO_ESPERA_MS: '14999' }, { ERP_RENOVACAO_ESPERA_MS: '51' },
     lockDe(3), { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '10' },
     { ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '299' },
+    // vazio vale o padrão, como a variável ausente (auditor_d19b_1, B11; igual a `lerNumeroPositivo`)
+    { ERP_RENOVACAO_ESPERA_MS: '' }, { ERP_RENOVACAO_ESPERA_PASSO_MS: '' },
+    { ERP_RENOVACAO_ESPERA_MS: '', ERP_RENOVACAO_ESPERA_PASSO_MS: '' },
   ]) await comAmbiente({ ...limpo, ...vars }, async () => assert.doesNotThrow(criar, JSON.stringify(vars)))
   // recusados, com o nome da variável culpada
   for (const [vars, culpada] of [
@@ -696,6 +699,10 @@ test('ERP_RENOVACAO_ESPERA_MS e ERP_RENOVACAO_ESPERA_PASSO_MS: padrao, teto e re
     [{ ERP_RENOVACAO_ESPERA_MS: '5000', ...lockDe(5) }, 'ERP_RENOVACAO_ESPERA_MS'],
     // o padrão (2000) também respeita o teto: com lock de 2 s não cabe
     [lockDe(2), 'ERP_RENOVACAO_ESPERA_MS'],
+    // vazio é o padrão (2000), não 0: também não cabe no lock de 2 s
+    [{ ERP_RENOVACAO_ESPERA_MS: '', ...lockDe(2) }, 'ERP_RENOVACAO_ESPERA_MS'],
+    // passo vazio é o padrão (50), não 0 nem recusa: também não cabe numa espera de 50
+    [{ ERP_RENOVACAO_ESPERA_MS: '50', ERP_RENOVACAO_ESPERA_PASSO_MS: '' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
     [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '9' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
     [{ ERP_RENOVACAO_ESPERA_PASSO_MS: '0' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
     [{ ERP_RENOVACAO_ESPERA_PASSO_MS: 'x' }, 'ERP_RENOVACAO_ESPERA_PASSO_MS'],
@@ -731,6 +738,61 @@ for (const [nome, criar] of tresStores) {
       assert.equal(await leitor.ler(id), null)
     })
   })
+}
+
+// auditor_d19b_1 (A10, A10c, A10d): erro do store ao ler a sessão é erro, não ausência. `ausente` faz o proxy
+// apagar o cookie e mandar ao login com a sessão intacta (o sintoma do D19); erro faz a requisição seguir
+// (decisao-proxy.ts: "Erro (IdP ou store fora): a sessão fica e a requisição segue"). Vale nas três leituras:
+// antes do lock, com o lock na mão e durante a espera do perdedor (token vencido, lock de outro dono).
+
+/** Leitor que lança a partir da leitura número `falharNa` (1 = a primeira), até `parar()`. */
+const leitorQueFalha = (leitor, falharNa) => {
+  let leituras = 0
+  let ativo = true
+  return {
+    ler: async (k) => {
+      leituras++
+      if (ativo && leituras >= falharNa) throw new Error('store fora do ar')
+      return leitor.ler(k)
+    },
+    parar: () => { ativo = false },
+    leituras: () => leituras,
+  }
+}
+
+const MOMENTOS_DA_FALHA = [
+  // [nome, leitura que lança, lock de outro dono?]
+  ['antes do lock (A10c)', 1, false],
+  ['na releitura com o lock na mao (A10d)', 2, false],
+  ['durante a espera do perdedor (A10)', 2, true],
+]
+
+for (const [nome, criar] of tresStores) {
+  for (const [momento, falharNa, lockDeOutro] of MOMENTOS_DA_FALHA) {
+    test(`${nome}: token vencido e store lancando ${momento}: renovarSessao rejeita, nunca ausente nem revogada, e a sessao fica`, { timeout: 10_000 }, async () => {
+      await comAmbiente(ESPERA_CURTA, async () => {
+        const { store, leitor } = criar()
+        const idp = idpContador()
+        const id = await sessaoVencida(shellCom(store, idp, leitor), store, leitor)
+        if (lockDeOutro) assert.ok(await store.adquirirLockRenovacao(id, 60_000), 'lock de outro processo')
+        // o mesmo store, visto por um leitor que lança a partir da leitura `falharNa` desta renovação
+        const leitorDoTeste = leitorQueFalha(leitor, falharNa)
+        const m = shellCom(store, idp, leitorDoTeste)
+        let estado
+        const inicio = Date.now()
+        try { estado = await m.sessao.renovarSessao(id) } catch (e) { estado = e }
+        leitorDoTeste.parar()
+        assert.ok(estado instanceof Error, `erro do store virou o estado ${JSON.stringify(estado)}`)
+        assert.match(estado.message, /store fora do ar/)
+        assert.ok(leitorDoTeste.leituras() >= falharNa, 'a falha nao aconteceu no momento pedido')
+        assert.ok(Date.now() - inicio < 1_000, 'esperou o teto em vez de propagar o erro')
+        assert.equal(idp.renovacoes, 0, 'chamou o IdP sem ter lido a sessao')
+        const s = await leitor.ler(id)
+        assert.ok(s, 'a sessao foi apagada por um erro do store')
+        assert.ok(s.tokenExpiraEm < Date.now(), 'a sessao mudou')
+      })
+    })
+  }
 }
 
 // --- D20, item 2: ERP_RENOVACAO_JANELA_S menor que metade da vida do token, conferido por sessão ----------------
