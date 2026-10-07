@@ -13,13 +13,60 @@ const TIMEOUT_PADRAO_MS = lerNumeroPositivo(process.env.ERP_FRAGMENTO_TIMEOUT_MS
 const NOME = /^[a-z0-9][a-z0-9-]*$/
 const CONTROLE = /[\u0000-\u001f\u007f]/
 /**
- * HTML de fragmento é inerte: sem script, sem manipulador inline, sem URL `javascript:`,
- * sem documento embutido. Cada zona tem o próprio nonce de CSP; script de outra zona
- * rodaria com o nonce errado ou abriria de volta o problema que tirou o Module Federation.
+ * HTML de fragmento é inerte (`02-zonas.md` §2.3): só a gramática estreita abaixo, por lista de permissão. Cada zona tem
+ * o próprio nonce de CSP, e script de outra zona rodaria com o nonce errado ou traria de volta o problema que tirou o
+ * Module Federation. A CSP não barra `<meta http-equiv=refresh>`, `<base>` nem `<form>`; por isso a lista é de
+ * permissão: tag, atributo ou valor fora dela reprova (D29, gate do C1).
  */
-const ATIVO = /<\s*(script|iframe|object|embed|frame)\b|\son[a-z]+\s*=|javascript\s*:|\ssrcdoc\s*=/i
+const TAGS = new Set(['section', 'div', 'span', 'p', 'h2', 'h3', 'h4', 'ul', 'ol', 'li', 'a', 'strong', 'em', 'small', 'time', 'br'])
+const VAZIAS = new Set(['br'])
+const ATRIBUTOS_GLOBAIS = new Set(['id', 'class', 'aria-label', 'aria-labelledby', 'aria-describedby', 'data-fragmento'])
+const ATRIBUTOS_DA_TAG: Readonly<Record<string, ReadonlySet<string>>> = {
+  a: new Set(['href']),
+  time: new Set(['datetime']),
+}
+const TOKEN = /<[^<>]*>|[^<>]+|[<>]/g
+const ABERTURA = /^<([a-z][a-z0-9]*)((?: [a-z][a-z0-9-]*="[^"]*")*)>$/
+const ATRIBUTO = / ([a-z][a-z0-9-]*)="([^"]*)"/g
+const FECHAMENTO = /^<\/([a-z][a-z0-9]*)>$/
+const ESCAPE = '&(?:amp|lt|gt|quot|#39);'
+const TEXTO = new RegExp(`^(?:[^<>&\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]|${ESCAPE}|&nbsp;)*$`)
+const VALOR = new RegExp(`^(?:[^"<>&\`\\u0000-\\u001f\\u007f]|${ESCAPE})*$`)
+/** Caminho da mesma origem: `/` sem `//` nem `/\`; sem `:` (esquema) e sem `&` (entidade). */
+const HREF = /^\/(?![/\\])[A-Za-z0-9\-._~/?=%#]*$/
 
-export const ehHtmlInerte = (html: string): boolean => !ATIVO.test(html)
+function atributosValidos(tag: string, atributos: string): boolean {
+  const vistos = new Set<string>()
+  for (const [, nome, valor] of atributos.matchAll(ATRIBUTO)) {
+    if (vistos.has(nome)) return false
+    vistos.add(nome)
+    if (!ATRIBUTOS_GLOBAIS.has(nome) && !ATRIBUTOS_DA_TAG[tag]?.has(nome)) return false
+    if (!VALOR.test(valor)) return false
+    if (nome === 'href' && !HREF.test(valor)) return false
+  }
+  return true
+}
+
+export function ehHtmlInerte(html: string): boolean {
+  const abertas: string[] = []
+  for (const [token] of html.matchAll(TOKEN)) {
+    if (!token.startsWith('<') && !token.startsWith('>')) {
+      if (!TEXTO.test(token)) return false
+      continue
+    }
+    const fecha = FECHAMENTO.exec(token)
+    if (fecha) {
+      if (abertas.pop() !== fecha[1]) return false
+      continue
+    }
+    const abre = ABERTURA.exec(token)
+    if (!abre) return false
+    const [, tag, atributos] = abre
+    if (!TAGS.has(tag) || !atributosValidos(tag, atributos)) return false
+    if (!VAZIAS.has(tag)) abertas.push(tag)
+  }
+  return abertas.length === 0
+}
 
 // ---------------------------------------------------------------- consumidor
 

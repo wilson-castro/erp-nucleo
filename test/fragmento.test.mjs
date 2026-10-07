@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { criarFragmento, responderFragmento } from '../dist/fabricas/fragmento.js'
+import { criarFragmento, responderFragmento, ehHtmlInerte } from '../dist/fabricas/fragmento.js'
 import { NaoEncontrado, SessaoInvalida } from '../dist/interno/erros.js'
 
 // ---------- consumidor: criarFragmento ----------
@@ -184,4 +184,129 @@ test('dono e consumidor juntos: o consumidor recebe o que o dono respondeu', asy
     fetch: async (url, init) => responderFragmento(new Request(url, init), async () => { throw new NaoEncontrado() }),
   }))
   assert.equal(await nega.buscar('zona2', 'tarefa', 't-1'), null)
+})
+
+// ---------- ehHtmlInerte: lista de permissão (D29) ----------
+
+const aceita = (html) => assert.equal(ehHtmlInerte(html), true, html)
+const recusa = (html) => assert.equal(ehHtmlInerte(html), false, html)
+
+test('o bloco canonico da zona 2 passa, inclusive com titulos hostis escapados', () => {
+  aceita('<section data-fragmento="zona2/tarefas" aria-labelledby="fragmento-zona2-tarefas">'
+    + '<h2 id="fragmento-zona2-tarefas">Tarefas pendentes (zona 2)</h2>'
+    + '<ul><li>&lt;img src=x onerror=alert(1)&gt;</li><li>a &amp; b &quot;c&quot; &#39;d&#39;</li></ul>'
+    + '<p><a href="/zona2">Abrir as tarefas</a></p></section>')
+  aceita('<p>Nenhuma tarefa pendente.</p>')
+  aceita('')
+  aceita('texto puro')
+  aceita('<p>linha<br>outra</p>')
+  aceita('<p class="t" id="x"><strong>a</strong> <em>b</em> <small>c</small> <span>d</span></p>')
+  aceita('<ol><li><time datetime="2026-10-07">7 out</time></li></ol><div><h3>a</h3><h4>b</h4></div>')
+  aceita('<a href="/zona1/relatorios?ano=2026#topo">r</a>')
+  aceita('<p>a&nbsp;b</p>')
+  aceita('<p>\tcom tab\nE quebra\r\n</p>')
+})
+
+test('tags fora da lista', () => {
+  for (const t of ['script', 'iframe', 'object', 'embed', 'frame', 'meta', 'base', 'form', 'style', 'link', 'img', 'svg',
+    'body', 'html', 'head', 'title', 'button', 'input', 'textarea', 'select', 'table', 'math', 'template', 'noscript']) {
+    recusa(`<${t}></${t}>`)
+    recusa(`<p><${t}></${t}></p>`)
+  }
+  recusa('<meta http-equiv="refresh" content="0;url=/sair">')
+  recusa('<base href="/">')
+})
+
+test('atributo fora da lista', () => {
+  for (const a of ['onclick', 'onerror', 'onload', 'onmouseover', 'style', 'src', 'srcdoc', 'action', 'formaction',
+    'target', 'rel', 'http-equiv', 'content', 'xlink:href', 'data-x', 'aria-hidden', 'tabindex', 'hidden']) {
+    recusa(`<p ${a}="x">a</p>`)
+  }
+  recusa('<time href="/a">a</time>')
+  recusa('<p datetime="2026">a</p>')
+})
+
+test('href so em a', () => {
+  for (const t of ['p', 'div', 'span', 'section', 'li']) recusa(`<${t} href="/a">a</${t}>`)
+})
+
+test('href com esquema ou entidade', () => {
+  for (const h of ['javascript:x', 'JaVaScRiPt:x', ' javascript:x', 'java\tscript:x', '&#106;avascript:x',
+    '&#x6A;avascript:x', 'javascript&colon;x', 'data:text/html,x', 'vbscript:x', 'https://fora.exemplo/a', 'mailto:a@b',
+    '/a?b=1&amp;c=2', '/a:b', 'a/b', '', '#topo', '/a b', '/a\\b']) {
+    recusa(`<a href="${h}">a</a>`)
+  }
+})
+
+test('href de outra origem', () => {
+  for (const h of ['//fora.exemplo/a', '/\\fora.exemplo/a', '///fora.exemplo']) recusa(`<a href="${h}">a</a>`)
+})
+
+test('aninhamento', () => {
+  recusa('<section>')
+  recusa('</section>')
+  recusa('<p>a</p></div></main>')
+  recusa('<ul><li>a</ul></li>')
+  recusa('<p><strong>a</p></strong>')
+})
+
+test('img/onerror e separadores', () => {
+  recusa('<img/onerror=alert(1)>')
+  recusa('<svg/onload=alert(1)>')
+  recusa('<body/onload=alert(1)>')
+  recusa('<p/class="a">a</p>')
+  recusa('<p\tclass="a">a</p>')
+  recusa('<p\nclass="a">a</p>')
+  recusa('<p  class="a">a</p>')
+  recusa('<p class="a"class="b">a</p>')
+  recusa('<p class="a" >a</p>')
+  recusa('<p class = "a">a</p>')
+})
+
+test('atributo sem aspas', () => {
+  recusa('<p class=a>a</p>')
+  recusa("<p class='a'>a</p>")
+  recusa('<p class>a</p>')
+  recusa('<a href=/a>a</a>')
+})
+
+test('entidades', () => {
+  recusa('<p>a & b</p>')
+  recusa('<p>&#60;script&#62;</p>')
+  recusa('<p>&lt</p>')
+  recusa('<p>&colon;</p>')
+  recusa('<p class="a&#34;b">a</p>')
+  recusa('<p class="a&nbsp;b">a</p>')
+  recusa('<p class="a&b">a</p>')
+  recusa('<p class="a`b">a</p>')
+  aceita('<p class="a&amp;b &lt;&gt;&quot;&#39;">a</p>')
+})
+
+test('sinal solto', () => {
+  for (const h of ['a < b', 'a > b', '<', '>', '<<p>a</p>', '<p>a</p>>', '<!-- x -->', '<!doctype html>',
+    '<![CDATA[x]]>', '<?xml?>', '< p>a</p>', '<p>a</ p>', '</>']) recusa(h)
+})
+
+test('atributo repetido', () => {
+  recusa('<p class="a" class="b">a</p>')
+  recusa('<a href="/a" href="/b">a</a>')
+})
+
+test('br vazia', () => {
+  recusa('<p>a<br></br></p>')
+  recusa('<p>a</br></p>')
+  recusa('<br/>')
+})
+
+test('maiusculas', () => {
+  recusa('<P>a</P>')
+  recusa('<p CLASS="a">a</p>')
+  recusa('<SCRIPT src=a>')
+})
+
+test('caracteres de controle fora de tab, LF e CR', () => {
+  recusa('<p>a\u0000b</p>')
+  recusa('<p>a\u0007b</p>')
+  recusa('<p class="a\u0000b">a</p>')
+  recusa('<p class="a\nb">a</p>')
 })
