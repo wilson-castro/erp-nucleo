@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { syncBuiltinESMExports } from 'node:module'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -598,7 +599,8 @@ for (const [nome, criar] of tresStores) {
       for (const { estado, ms } of await Promise.all(perdedores)) {
         assert.equal(estado, 'em-andamento')
         assert.ok(ms >= 300, `voltou antes do teto: ${ms} ms`)
-        assert.ok(ms <= 300 + 2 * 20 + 25, `passou do teto mais dois passos: ${ms} ms`)
+        // O escalonamento e a releitura do store não têm teto de tempo real.
+        // O limite do algoritmo é provado abaixo com relógio controlado.
       }
       assert.equal(idp.renovacoes, 1, 'a espera chamou o IdP')
       assert.ok(await leitor.ler(id), 'a sessao foi apagada por um erro transitorio')
@@ -647,6 +649,42 @@ for (const [nome, criar] of tresStores) {
     })
   })
 }
+
+test('perdedor: relogio controlado prova teto de 300 ms, sem nova chamada ao IdP ou exclusao', async (t) => {
+  await comAmbiente(ESPERA_CURTA, async () => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+    syncBuiltinESMExports()
+    try {
+      const store = sessaoMemoria()
+      const idp = idpContador()
+      idp.renovar = async () => { idp.renovacoes++; await new Promise((r) => setTimeout(r, 30)); throw new Error('IdP fora do ar') }
+      const contador = contandoLeituras(store)
+      const n = shellCom(store, idp, contador)
+      const id = await sessaoVencida(n, store, store)
+      const vencedor = n.sessao.renovarSessao(id)
+      const erro = assert.rejects(vencedor, /IdP fora do ar/)
+      let resolvido = false
+      const inicio = Date.now()
+      const perdedor = n.sessao.renovarSessao(id).then((estado) => { resolvido = true; return estado })
+      // setImmediate deixa as continuacoes assíncronas rodarem sem avançar o relógio falso.
+      await new Promise(setImmediate)
+      for (let ms = 20; ms < 300; ms += 20) {
+        t.mock.timers.tick(20)
+        await new Promise(setImmediate)
+        assert.equal(resolvido, false, `voltou antes do teto: ${ms} ms`)
+      }
+      t.mock.timers.tick(20)
+      await new Promise(setImmediate)
+      assert.equal(resolvido, true, 'perdedor ultrapassou o teto mesmo com store imediato')
+      assert.equal(await perdedor, 'em-andamento')
+      assert.equal(Date.now() - inicio, 300)
+      await erro
+      assert.equal(idp.renovacoes, 1)
+      assert.ok(await store.ler(id), 'erro transitorio apagou a sessao')
+      assert.ok(contador.leituras <= 19, `releituras demais: ${contador.leituras}`)
+    } finally { t.mock.timers.reset(); syncBuiltinESMExports() }
+  })
+})
 
 test('a espera rele no passo configurado (ERP_RENOVACAO_ESPERA_PASSO_MS), nao em laco', { timeout: 10_000 }, async () => {
   await comAmbiente({ ERP_RENOVACAO_ESPERA_MS: '300', ERP_RENOVACAO_ESPERA_PASSO_MS: '100' }, async () => {
