@@ -90,7 +90,8 @@ export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
     iniciarLogin(destino?: string): Promise<{ url: string; idTransacao: string; expiraEm: number }>
     /**
      * Consome a transação (uso único, mesmo se o retorno for recusado), conclui no IdP, cunha
-     * um id de sessão NOVO e grava. Devolve só o id e o destino guardado na transação.
+     * consulta acesso com o token recebido e só então cunha um id de sessão NOVO e grava.
+     * `401` recusa o login; demais falhas lançam. Devolve só id e destino da transação.
      */
     concluirLogin(idTransacao: string | undefined, parametros: Record<string, string>): Promise<{ id: string; destino: string } | null>
     /**
@@ -285,6 +286,19 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
         if (!transacao || Date.now() >= transacao.expiraEm) return null
         const s = await identidade.concluir(parametros, transacao)
         if (!s) return null
+        // ADR-0014, adendo 1: nenhuma sessão, nem provisória, antes de confirmar a pessoa.
+        // Transporte privado deste retorno: o token recém-obtido não depende de cookie/store
+        // e não passa a fazer parte da API pública. Origem, método e credencial vêm do registro.
+        const destino = criarTransporte({
+          app: cfg.app, registro: cfg.destinos, obterToken: async () => s.accessToken,
+          tokenDeServico: cfg.tokenDeServico, lerTraceparent: cfg.lerTraceparent,
+        })
+        try {
+          await cfg.acesso({ destino }).acessoEfetivo()
+        } catch (e) {
+          if (e instanceof SessaoInvalida) return null
+          throw e
+        }
         // id novo a cada login: um id que existisse antes do login não vira sessão autenticada
         const id = randomUUID()
         await store.gravar(id, comVidaDoToken(s, null))
