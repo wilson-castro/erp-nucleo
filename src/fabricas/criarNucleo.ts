@@ -108,6 +108,11 @@ export type NucleoDoShell = Omit<Nucleo, 'sessao'> & {
      * mesmo se o IdP falhar. `urlLogout` é `null` sem sessão ou sem logout no IdP.
      */
     encerrarSessao(id: string | undefined): Promise<{ urlLogout: string | null }>
+    /**
+     * Remove todas as sessões de `sub` no store (revogação ativa por `/v2/eventos`:
+     * `PESSOA_DESLIGADA` e `PESSOA_SUSPENSA`, ADR-0014, decisão 5). Devolve quantas removeu.
+     */
+    removerSessoesDoSujeito(sub: string): Promise<number>
   }
 }
 
@@ -322,6 +327,11 @@ export function criarNucleoDoShell(cfg: ConfigDoNucleoDoShell): NucleoDoShell {
         await store.remover(id)
         if (!s) return { urlLogout: null }
         return identidade.encerrar(s)
+      },
+
+      async removerSessoesDoSujeito(sub) {
+        if (typeof sub !== 'string' || sub.length === 0) return 0
+        return store.removerPorSujeito(sub)
       },
     },
   }

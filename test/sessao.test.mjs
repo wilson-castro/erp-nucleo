@@ -38,7 +38,7 @@ test('o nucleo de zona nao tem login, renovacao nem encerramento; o do shell tem
   const forjado = criarNucleo({ app: 'z', sessao: sessaoArquivo({ dir }), destinos: {}, acesso: acessoFake({ modulos: [], administra: false }),
     lerCookieDeSessao: async () => undefined, escrita: { store: sessaoArquivoDeEscrita({ dir }), identidade: identidadeDev() } })
   assert.deepEqual(Object.keys(forjado.sessao).sort(), ['atual', 'exigir'])
-  assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'concluirLogin', 'encerrarSessao', 'exigir', 'iniciarLogin', 'renovarSessao'])
+  assert.deepEqual(Object.keys(shell().sessao).sort(), ['atual', 'concluirLogin', 'encerrarSessao', 'exigir', 'iniciarLogin', 'removerSessoesDoSujeito', 'renovarSessao'])
 })
 
 test('identidadeDev recusa rodar em producao sem opt-in explicito', () => {
@@ -75,4 +75,16 @@ test('encerrar no shell acaba a sessao na zona; exigir destruturado continua fun
 test('sessao expirada e tratada como ausente', async () => {
   await sessaoArquivoDeEscrita({ dir }).gravar('sid-3', viva('ana', { expiraEm: Date.now() - 1 }))
   assert.equal(await zona('sid-3').sessao.atual(), null)
+})
+
+test('removerSessoesDoSujeito no shell encerra todas as sessoes do sujeito sem tocar outros sujeitos', async () => {
+  const esc = sessaoArquivoDeEscrita({ dir })
+  await esc.gravar('sid-davi-1', viva('davi'))
+  await esc.gravar('sid-davi-2', viva('davi'))
+  await esc.gravar('sid-carla-1', viva('carla'))
+  assert.equal(await shell().sessao.removerSessoesDoSujeito('davi'), 2)
+  assert.equal(await zona('sid-davi-1').sessao.atual(), null)
+  assert.equal(await zona('sid-davi-2').sessao.atual(), null)
+  assert.equal((await zona('sid-carla-1').sessao.atual()).sub, 'carla')
+  assert.equal(await shell().sessao.removerSessoesDoSujeito(''), 0)
 })

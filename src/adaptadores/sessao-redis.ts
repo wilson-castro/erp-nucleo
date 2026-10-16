@@ -37,20 +37,23 @@ export type ConfigSessaoRedis<C extends ClienteRedisDeLeitura = ClienteRedis> = 
 }
 
 /**
- * Transação de login e lock de renovação têm prefixo próprio, FORA do de sessão: o usuário ACL
- * das zonas só lê `erp:sessao:*` (base/showcase/docker-compose.yml), e a transação leva o
- * `code_verifier` do PKCE. Quem divide a instância entre ambientes troca os três.
+ * Transação de login, lock de renovação e índice por sujeito têm prefixo próprio, FORA do de sessão:
+ * o usuário ACL das zonas só lê `erp:sessao:*` (base/showcase/docker-compose.yml), e a transação leva o
+ * `code_verifier` do PKCE. Quem divide a instância entre ambientes troca todos.
  */
 export type ConfigSessaoRedisDeEscrita = ConfigSessaoRedis & {
   /** Padrão `erp:login:`. */
   prefixoLogin?: string
   /** Padrão `erp:renovacao:`. */
   prefixoLock?: string
+  /** Padrão `erp:sujeito:`. */
+  prefixoSujeito?: string
 }
 
 const PREFIXO_PADRAO = 'erp:sessao:'
 const PREFIXO_LOGIN_PADRAO = 'erp:login:'
 const PREFIXO_LOCK_PADRAO = 'erp:renovacao:'
+const PREFIXO_SUJEITO_PADRAO = 'erp:sujeito:'
 
 // o id da sessão nunca vira chave crua: quem lista as chaves não ganha cookies válidos
 const chaveDe = (prefixo: string) => (id: string) =>
@@ -71,6 +74,22 @@ function ehSessao(v: unknown): v is SessaoArmazenada {
   // sessão sem sujeito ou sem token é dado corrompido, não sessão (auditor_b1_d1_2, L7)
   return typeof s.sub === 'string' && s.sub.length > 0 && typeof s.nome === 'string'
     && typeof s.accessToken === 'string' && s.accessToken.length > 0 && typeof s.expiraEm === 'number'
+}
+
+type EntradaIndiceSujeito = { k: string; expiraEm: number }
+
+function lerIndiceSujeito(bruto: string | null, agora: number): EntradaIndiceSujeito[] {
+  if (!bruto) return []
+  try {
+    const v: unknown = JSON.parse(bruto)
+    if (!Array.isArray(v)) return []
+    return v.filter((x): x is EntradaIndiceSujeito =>
+      typeof x === 'object' && x !== null
+      && typeof (x as EntradaIndiceSujeito).k === 'string'
+      && typeof (x as EntradaIndiceSujeito).expiraEm === 'number'
+      && (x as EntradaIndiceSujeito).expiraEm > agora,
+    )
+  } catch { return [] }
 }
 
 /**
@@ -95,27 +114,64 @@ export function sessaoRedis(cfg: ConfigSessaoRedis<ClienteRedisDeLeitura>): Leit
 /**
  * Escritor: só o shell. Publicado apenas em `@erp/nucleo/shell` (invariante 15). A chave
  * expira junto com a sessão, então o Redis limpa sozinho o que o shell não encerrou; o mesmo
- * vale para a transação de login (TTL da própria validade) e para o lock (TTL de quem pede).
+ * vale para a transação de login (TTL da própria validade), para o lock (TTL de quem pede) e
+ * para o índice de sessões por sujeito (maior TTL entre as sessões ativas do sujeito).
  */
 export function sessaoRedisDeEscrita(cfg: ConfigSessaoRedisDeEscrita): StoreDeSessao {
   const prefixo = cfg.prefixo ?? PREFIXO_PADRAO
   const prefixoLogin = cfg.prefixoLogin ?? PREFIXO_LOGIN_PADRAO
   const prefixoLock = cfg.prefixoLock ?? PREFIXO_LOCK_PADRAO
-  for (const [nome, p] of [['prefixoLogin', prefixoLogin], ['prefixoLock', prefixoLock]] as const) {
-    if (p.startsWith(prefixo)) throw new Error(`configuracao invalida: ${nome} "${p}" cai dentro do prefixo de sessao "${prefixo}", que as zonas leem`)
+  const prefixoSujeito = cfg.prefixoSujeito ?? PREFIXO_SUJEITO_PADRAO
+  for (const [nome, p] of [['prefixoLogin', prefixoLogin], ['prefixoLock', prefixoLock], ['prefixoSujeito', prefixoSujeito]] as const) {
+    if (p.startsWith(prefixo) || prefixo.startsWith(p)) {
+      throw new Error(`configuracao invalida: ${nome} "${p}" cai dentro do prefixo de sessao "${prefixo}", que as zonas leem`)
+    }
+  }
+  for (const [a, b] of [[prefixoSujeito, prefixoLogin], [prefixoSujeito, prefixoLock]] as const) {
+    if (a.startsWith(b) || b.startsWith(a)) {
+      throw new Error(`configuracao invalida: prefixoSujeito "${a}" colide com "${b}"`)
+    }
   }
   const chave = chaveDe(prefixo)
   const chaveLogin = chaveDe(prefixoLogin)
   const chaveLock = chaveDe(prefixoLock)
+  const chaveSujeito = chaveDe(prefixoSujeito)
+
+  async function indexarSujeito(sub: string, kSessao: string, expiraEm: number): Promise<void> {
+    if (typeof sub !== 'string' || sub.length === 0) return
+    const kSujeito = chaveSujeito(sub)
+    const agora = Date.now()
+    const atuais = lerIndiceSujeito(await cfg.cliente.get(kSujeito), agora).filter((x) => x.k !== kSessao)
+    if (expiraEm > agora) atuais.push({ k: kSessao, expiraEm })
+    if (atuais.length === 0) {
+      await cfg.cliente.del(kSujeito)
+      return
+    }
+    const maxExpiraEm = Math.max(...atuais.map((x) => x.expiraEm))
+    const px = Math.floor(maxExpiraEm - agora)
+    if (px <= 0) {
+      await cfg.cliente.del(kSujeito)
+      return
+    }
+    await cfg.cliente.set(kSujeito, JSON.stringify(atuais), { PX: px })
+  }
+
   return {
     ...sessaoRedis(cfg),
     async gravar(id, s) {
+      const kSessao = chave(id)
       const restante = Math.floor(s.expiraEm - Date.now())
       if (restante <= 0) {
-        await semVazar(() => cfg.cliente.del(chave(id)))
+        await semVazar(async () => {
+          await cfg.cliente.del(kSessao)
+          await indexarSujeito(s.sub, kSessao, s.expiraEm)
+        })
         return
       }
-      await semVazar(() => cfg.cliente.set(chave(id), JSON.stringify(s), { PX: restante }))
+      await semVazar(async () => {
+        await cfg.cliente.set(kSessao, JSON.stringify(s), { PX: restante })
+        await indexarSujeito(s.sub, kSessao, s.expiraEm)
+      })
     },
     async remover(id) { await semVazar(() => cfg.cliente.del(chave(id))) },
     async regravar(id, s) {
@@ -146,6 +202,18 @@ export function sessaoRedisDeEscrita(cfg: ConfigSessaoRedisDeEscrita): StoreDeSe
       validarTtlDoLock(ttlMs)
       const r = await semVazar(() => cfg.cliente.set(chaveLock(idSessao), '1', { PX: ttlMs, NX: true }))
       return r === 'OK'
+    },
+    async removerPorSujeito(sub) {
+      if (typeof sub !== 'string' || sub.length === 0) return 0
+      return semVazar(async () => {
+        const bruto = await cfg.cliente.getDel(chaveSujeito(sub))
+        const entradas = lerIndiceSujeito(bruto, Date.now())
+        let removidas = 0
+        for (const { k } of entradas) {
+          if (Number(await cfg.cliente.del(k)) > 0) removidas++
+        }
+        return removidas
+      })
     },
   }
 }

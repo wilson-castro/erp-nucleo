@@ -38,5 +38,16 @@ export function sessaoMemoria(): StoreDeSessao {
       locks.set(idSessao, Date.now() + ttlMs)
       return true
     },
+    removerPorSujeito: async (sub) => {
+      if (typeof sub !== 'string' || sub.length === 0) return 0
+      let removidas = 0
+      for (const [id, s] of m.entries()) {
+        if (s.sub === sub) {
+          m.delete(id)
+          removidas++
+        }
+      }
+      return removidas
+    },
   }
 }

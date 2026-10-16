@@ -1,5 +1,5 @@
 import 'server-only'
-import { mkdirSync, writeFileSync, readFileSync, renameSync, rmSync, existsSync, linkSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync, rmSync, existsSync, linkSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import type { LeitorDeSessao, StoreDeSessao, SessaoArmazenada } from '../portas/sessao.js'
@@ -108,6 +108,22 @@ export function sessaoArquivoDeEscrita(cfg: { dir: string }): StoreDeSessao {
         }
       } finally { rmSync(tomado, { force: true }) }
       return criarLock(f, ttlMs)
+    },
+    async removerPorSujeito(sub) {
+      if (typeof sub !== 'string' || sub.length === 0) return 0
+      let removidas = 0
+      for (const nome of readdirSync(cfg.dir)) {
+        if (!nome.endsWith('.json')) continue
+        const f = join(cfg.dir, nome)
+        try {
+          const s = JSON.parse(readFileSync(f, 'utf8')) as SessaoArmazenada
+          if (s?.sub === sub) {
+            rmSync(f, { force: true })
+            removidas++
+          }
+        } catch { /* arquivo removido ou corrompido */ }
+      }
+      return removidas
     },
   }
 }
