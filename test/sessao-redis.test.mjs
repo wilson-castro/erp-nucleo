@@ -83,7 +83,7 @@ test('sessao ja expirada nao e gravada e apaga a anterior', async () => {
   await esc.gravar('s', viva('ana'))
   await esc.gravar('s', viva('ana', -1))
   assert.equal(r.dados.size, 0)
-  assert.equal(r.chamadas.filter(([c]) => c === 'set').length, 1)
+  assert.equal(r.chamadas.filter(([c, k]) => c === 'set' && k.startsWith('erp:sessao:')).length, 1)
 })
 
 test('o Redis expira a chave sozinho: depois do TTL a leitura e ausente', async () => {
@@ -143,6 +143,7 @@ test('Redis fora do ar vira erro normalizado, sem vazar o motivo (invariante 12)
     () => sessaoRedisDeEscrita({ cliente: quebrado }).gravarTransacao(tx),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).consumirTransacao('t'),
     () => sessaoRedisDeEscrita({ cliente: quebrado }).adquirirLockRenovacao('s', 1_000),
+    () => sessaoRedisDeEscrita({ cliente: quebrado }).removerPorSujeito('ana'),
   ]) {
     await assert.rejects(f, (e) => {
       assert.ok(e instanceof ErroDeAplicacao)
@@ -302,4 +303,58 @@ test('regravar usa SET XX PX: grava sessao existente e nao ressuscita sessao rem
   await esc.remover('s')
   assert.equal(await esc.regravar('s', viva('ana')), false)
   assert.equal(await leitor.ler('s'), null)
+})
+
+test('removerPorSujeito apaga todas as sessoes do sujeito e preserva as de outros sujeitos, com indice fora de erp:sessao:*', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  const leitor = sessaoRedis({ cliente: r })
+  await esc.gravar('s-ana-1', viva('ana', 20_000))
+  await esc.gravar('s-ana-2', viva('ana', 60_000))
+  await esc.gravar('s-bruno-1', viva('bruno', 60_000))
+
+  const chavesIndice = [...r.dados.keys()].filter((k) => k.startsWith('erp:sujeito:'))
+  assert.equal(chavesIndice.length, 2)
+  for (const k of chavesIndice) {
+    assert.match(k, /^erp:sujeito:[0-9a-f]{64}$/)
+    assert.ok(!k.startsWith('erp:sessao:'))
+  }
+
+  const removidas = await esc.removerPorSujeito('ana')
+  assert.equal(removidas, 2)
+  assert.equal(await leitor.ler('s-ana-1'), null)
+  assert.equal(await leitor.ler('s-ana-2'), null)
+  assert.equal((await leitor.ler('s-bruno-1')).sub, 'bruno')
+  assert.equal(await esc.removerPorSujeito('ana'), 0)
+})
+
+test('removerPorSujeito mantem TTL do indice pelo maior TTL entre as sessoes do sujeito', async () => {
+  let t = 1_000_000
+  const r = redisFalso({ agora: () => t })
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  const leitor = sessaoRedis({ cliente: r })
+  await esc.gravar('s-longa', { sub: 'ana', nome: 'ana', accessToken: 'tk1', expiraEm: Date.now() + 60_000 })
+  await esc.gravar('s-curta', { sub: 'ana', nome: 'ana', accessToken: 'tk2', expiraEm: Date.now() + 10_000 })
+  const [, , opIndice] = r.chamadas.filter(([c, k]) => c === 'set' && k.startsWith('erp:sujeito:')).at(-1)
+  assert.ok(opIndice.PX > 55_000, `PX do indice deveria acompanhar a maior sessao, veio ${opIndice.PX}`)
+  t += 20_000
+  const removidas = await esc.removerPorSujeito('ana')
+  assert.ok(removidas >= 1)
+  assert.equal(await leitor.ler('s-longa'), null)
+})
+
+test('removerPorSujeito com sub invalido devolve 0 sem tocar o Redis, e prefixoSujeito colidente e recusado', async () => {
+  const r = redisFalso()
+  const esc = sessaoRedisDeEscrita({ cliente: r })
+  for (const sub of ['', undefined, null, 42]) {
+    assert.equal(await esc.removerPorSujeito(sub), 0)
+  }
+  assert.equal(r.chamadas.length, 0)
+  for (const cfg of [
+    { prefixoSujeito: 'erp:sessao:sujeito:' },
+    { prefixoSujeito: 'erp:login:' },
+    { prefixoSujeito: 'erp:renovacao:' },
+  ]) {
+    assert.throws(() => sessaoRedisDeEscrita({ cliente: r, ...cfg }), /prefixo/, JSON.stringify(cfg))
+  }
 })

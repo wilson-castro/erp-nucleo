@@ -49,6 +49,11 @@ export interface EscritorDeSessao {
    * `true` para quem ganhou. Não há liberação explícita: o TTL libera, e serve de backoff.
    */
   adquirirLockRenovacao(idSessao: string, ttlMs: number): Promise<boolean>
+  /**
+   * Remove todas as sessões de `sub` (revogação ativa por evento de desligamento ou suspensão,
+   * ADR-0014, decisão 5). Devolve quantas sessões foram removidas.
+   */
+  removerPorSujeito(sub: string): Promise<number>
 }
 
 export type StoreDeSessao = LeitorDeSessao & EscritorDeSessao

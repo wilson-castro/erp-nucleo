@@ -239,9 +239,18 @@ async function logar(n, usuario = 'ana', destino = '/zona1') {
   return n.sessao.concluirLogin(idTransacao, retornoDe(url, usuario))
 }
 
-test('o shell tem iniciarLogin, concluirLogin, renovarSessao e encerrarSessao, e mais nada de escrita', () => {
-  assert.deepEqual(Object.keys(shellCom(sessaoMemoria(), identidadeDev()).sessao).sort(),
-    ['atual', 'concluirLogin', 'encerrarSessao', 'exigir', 'iniciarLogin', 'renovarSessao'])
+test('o shell tem iniciarLogin, concluirLogin, renovarSessao, encerrarSessao e removerSessoesDoSujeito, e mais nada de escrita', async () => {
+  const store = sessaoMemoria()
+  const n = shellCom(store, identidadeDev())
+  assert.deepEqual(Object.keys(n.sessao).sort(),
+    ['atual', 'concluirLogin', 'encerrarSessao', 'exigir', 'iniciarLogin', 'removerSessoesDoSujeito', 'renovarSessao'])
+  await store.gravar('m-ana-1', { sub: 'ana', nome: 'Ana', accessToken: 'tk1', expiraEm: Date.now() + 60_000 })
+  await store.gravar('m-ana-2', { sub: 'ana', nome: 'Ana', accessToken: 'tk2', expiraEm: Date.now() + 60_000 })
+  await store.gravar('m-bruno', { sub: 'bruno', nome: 'Bruno', accessToken: 'tk3', expiraEm: Date.now() + 60_000 })
+  assert.equal(await n.sessao.removerSessoesDoSujeito('ana'), 2)
+  assert.equal(await store.ler('m-ana-1'), null)
+  assert.equal(await store.ler('m-ana-2'), null)
+  assert.equal((await store.ler('m-bruno')).sub, 'bruno')
 })
 
 test('iniciarLogin devolve so url, id opaco e expiraEm: state, nonce e code_verifier ficam no store', async () => {

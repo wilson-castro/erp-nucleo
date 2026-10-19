@@ -21,6 +21,12 @@ no repositório principal, seção 7.
 Camadas em `src/` (`portas`, `adaptadores`, `interno`, `fabricas`, `shell`): quem importa quem é
 verificado por `pnpm fronteira`.
 
+## Versão 0.10.6
+
+Integra a validação do acesso efetivo antes de gravar a sessão de login e a revogação ativa
+por sujeito (`removerPorSujeito` / `removerSessoesDoSujeito`, G5). Substitui os dois conteúdos
+divergentes publicados como 0.10.5; nenhum deles deve ser republicado (ADR-0010).
+
 ## Comandos
 
 ```bash
